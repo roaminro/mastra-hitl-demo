@@ -1,0 +1,12 @@
+{
+  "name": "hitl",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter server dev",
+    "dev:server": "pnpm --filter server dev",
+    "build": "pnpm --filter server build",
+    "start": "pnpm --filter server start",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "packageManager": "pnpm@10.12.1"
+}
