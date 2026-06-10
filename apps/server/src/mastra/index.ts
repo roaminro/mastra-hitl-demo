@@ -5,6 +5,7 @@ import { LibSQLStore } from '@mastra/libsql';
 import { DuckDBStore } from "@mastra/duckdb";
 import { MastraCompositeStore } from '@mastra/core/storage';
 import { Observability, MastraStorageExporter, MastraPlatformExporter, SensitiveDataFilter } from '@mastra/observability';
+import { chatRoute } from '@mastra/ai-sdk';
 import { researcherAgent } from './agents/researcher-agent';
 import { writerAgent } from './agents/writer-agent';
 import { publisherAgent } from './agents/publisher-agent';
@@ -22,6 +23,14 @@ export const mastra = new Mastra({
     accountAgent,
     billingAgent,
     supportAgent,
+  },
+  server: {
+    apiRoutes: [
+      chatRoute({
+        path: '/chat/:agentId',
+        version: 'v6',
+      }),
+    ],
   },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
