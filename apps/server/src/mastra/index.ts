@@ -9,9 +9,20 @@ import { researcherAgent } from './agents/researcher-agent';
 import { writerAgent } from './agents/writer-agent';
 import { publisherAgent } from './agents/publisher-agent';
 import { editorAgent } from './agents/editor-agent';
+import { accountAgent } from './agents/account-agent';
+import { billingAgent } from './agents/billing-agent';
+import { supportAgent } from './agents/support-agent';
 
 export const mastra = new Mastra({
-  agents: { researcherAgent, writerAgent, publisherAgent, editorAgent },
+  agents: {
+    researcherAgent,
+    writerAgent,
+    publisherAgent,
+    editorAgent,
+    accountAgent,
+    billingAgent,
+    supportAgent,
+  },
   storage: new MastraCompositeStore({
     id: 'composite-storage',
     default: new LibSQLStore({
