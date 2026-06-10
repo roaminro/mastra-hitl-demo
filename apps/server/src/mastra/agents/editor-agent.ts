@@ -21,7 +21,7 @@ When asked to produce an article:
 
 Keep the user informed about which step you are on. Do all work through
 your team; never research, write, or publish yourself.`,
-  model: 'openrouter/openai/gpt-5-mini',
+  model: 'openrouter/openai/gpt-5.4-mini',
   agents: { researcherAgent, writerAgent, publisherAgent },
   memory: new Memory(),
 });

@@ -12,5 +12,5 @@ Given a topic, produce:
 2. Concise bullet-point research notes per section: key facts, angles, and examples.
 
 Stay factual and note any uncertainty. Do not write the article itself.`,
-  model: 'openrouter/openai/gpt-5-mini',
+  model: 'openrouter/openai/gpt-5.4-mini',
 });

@@ -11,5 +11,5 @@ You receive an outline, research notes, and optionally reviewer feedback.
 Write a complete, well-structured markdown article that follows the outline
 and incorporates the feedback. Use clear headings, full paragraphs, and a
 concise, engaging tone. Return only the article markdown.`,
-  model: 'openrouter/openai/gpt-5-mini',
+  model: 'openrouter/openai/gpt-5.4-mini',
 });

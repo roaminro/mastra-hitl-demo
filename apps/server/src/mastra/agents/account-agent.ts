@@ -12,6 +12,6 @@ Given a customer email or ID, look up their record and order history using
 your tools. Report findings concisely and factually: plan, tenure, orders
 with statuses and amounts, and any past refunds. Do not make promises or
 decisions about refunds or account changes — that is not your job.`,
-  model: 'openrouter/openai/gpt-5-mini',
+  model: 'openrouter/openai/gpt-5.4-mini',
   tools: { lookupCustomerTool, lookupOrdersTool },
 });
