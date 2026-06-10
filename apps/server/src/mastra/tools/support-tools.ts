@@ -2,6 +2,31 @@ import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import { customers, refunds } from './support-data';
 
+export const listCustomersTool = createTool({
+  id: 'list-customers',
+  description:
+    'List all customers in the CRM with their ID, name, email, and plan.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    customers: z.array(
+      z.object({
+        customerId: z.string(),
+        name: z.string(),
+        email: z.string(),
+        plan: z.string(),
+      }),
+    ),
+  }),
+  execute: async () => ({
+    customers: customers.map(({ customerId, name, email, plan }) => ({
+      customerId,
+      name,
+      email,
+      plan,
+    })),
+  }),
+});
+
 export const lookupCustomerTool = createTool({
   id: 'lookup-customer',
   description: 'Look up a customer record (plan, contact info) by email or customer ID.',
