@@ -56,14 +56,16 @@ export const Assistant = () => {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div className="grid h-dvh grid-cols-[260px_1fr]">
-        <aside className="border-border bg-muted/30 flex flex-col gap-2 overflow-y-auto border-r p-3">
+      <div className="flex h-dvh overflow-hidden">
+        <aside className="border-border bg-muted/30 flex w-[260px] shrink-0 flex-col gap-2 overflow-y-auto border-r p-3">
           <div className="text-muted-foreground px-2 pt-1 text-xs font-semibold tracking-wide uppercase">
             Tickets
           </div>
           <ThreadList />
         </aside>
-        <Thread />
+        <main className="h-full min-w-0 flex-1">
+          <Thread />
+        </main>
       </div>
     </AssistantRuntimeProvider>
   );
