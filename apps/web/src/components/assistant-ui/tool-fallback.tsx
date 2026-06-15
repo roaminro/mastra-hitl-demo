@@ -328,7 +328,178 @@ function ToolFallbackApproval({
   );
 }
 
-const ToolFallbackImpl: ToolCallMessagePartComponent = ({
+const humanizeAgentToolName = (toolName: string) =>
+  toolName
+    .replace(/^agent-/, "")
+    .replace(/[Aa]gent$/, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim() || toolName;
+
+/**
+ * Approval-only view for a subagent delegation (`agent-*` tool) that is
+ * waiting on an Allow/Deny decision. The live work for the delegation is
+ * rendered separately by the `SubagentActivity` data-part renderer, so this
+ * intentionally renders just the decision prompt rather than a second card.
+ */
+function AgentApprovalPrompt({
+  toolName,
+  addResult,
+  resume,
+  interrupt,
+  approval,
+  respondToApproval,
+}: Pick<
+  ToolCallMessagePartProps,
+  "addResult" | "resume" | "respondToApproval"
+> & {
+  toolName: string;
+  interrupt?: ToolCallMessagePart["interrupt"];
+  approval?: ToolCallMessagePart["approval"];
+}) {
+  return (
+    <div
+      data-slot="agent-approval-prompt"
+      className="border-border/60 bg-muted/20 my-1 flex flex-col gap-1.5 rounded-lg border px-3 py-2.5"
+    >
+      <div className="text-foreground flex items-center gap-2 text-sm">
+        <AlertCircleIcon className="size-4 shrink-0 text-amber-600 dark:text-amber-500" />
+        <span>
+          <b>{humanizeAgentToolName(toolName)}</b> needs approval to continue
+        </span>
+      </div>
+      <ToolFallbackApproval
+        addResult={addResult}
+        resume={resume}
+        interrupt={interrupt}
+        approval={approval}
+        respondToApproval={respondToApproval}
+      />
+    </div>
+  );
+}
+
+const ToolFallbackImpl: ToolCallMessagePartComponent = (props) => {
+  // Subagent delegations (`agent-*` tools) are special-cased so we never show
+  // the same delegation twice. Handled in a wrapper so neither path runs hooks
+  // conditionally.
+  if (props.toolName.startsWith("agent-")) {
+    return <AgentDelegationToolPart {...props} />;
+  }
+  return <StandardToolFallback {...props} />;
+};
+
+/**
+ * Compact summary card for a subagent delegation (`agent-*` tool). Used for
+ * delegations that are *not* live-streaming: completed ones restored from
+ * history after a page refresh (when the live `SubagentActivity` data-part is
+ * gone) and any finished delegation. While a delegation is actively running,
+ * the richer `SubagentActivity` data-part owns the display and this renders
+ * nothing to avoid a duplicate card. Approval requests render the Allow/Deny
+ * prompt (the approval UI must live on this tool-call part, not the data part).
+ */
+const AgentDelegationToolPart: ToolCallMessagePartComponent = ({
+  toolName,
+  result,
+  status,
+  addResult,
+  resume,
+  interrupt,
+  approval,
+  respondToApproval,
+}) => {
+  const isRequiresAction =
+    status?.type === "requires-action" &&
+    ((approval != null && approval.approved === undefined) ||
+      interrupt != null);
+
+  if (isRequiresAction) {
+    return (
+      <AgentApprovalPrompt
+        toolName={toolName}
+        addResult={addResult}
+        resume={resume}
+        interrupt={interrupt}
+        approval={approval}
+        respondToApproval={respondToApproval}
+      />
+    );
+  }
+
+  // Running live: the SubagentActivity data-part renders the rich card.
+  if (status?.type === "running") return null;
+
+  // Finished / restored from history: the data-part no longer exists, so show
+  // a compact card with the delegation's output. Without this, a delegation
+  // disappears entirely after a page refresh.
+  return (
+    <AgentDelegationSummary
+      toolName={toolName}
+      result={result}
+      status={status}
+    />
+  );
+};
+
+function AgentDelegationSummary({
+  toolName,
+  result,
+  status,
+}: {
+  toolName: string;
+  result?: unknown;
+  status?: ToolCallMessagePartStatus;
+}) {
+  const [open, setOpen] = useState(false);
+  const failed = status?.type === "incomplete";
+  const Icon = failed ? XCircleIcon : CheckIcon;
+  const name = humanizeAgentToolName(toolName);
+  const resultText =
+    result === undefined
+      ? undefined
+      : typeof result === "string"
+        ? result
+        : JSON.stringify(result, null, 2);
+
+  return (
+    <div
+      data-slot="agent-delegation-summary"
+      className="border-border/60 bg-muted/20 my-1 w-full rounded-lg border"
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="text-foreground hover:bg-muted/40 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors"
+      >
+        <Icon
+          className={cn(
+            "size-4 shrink-0",
+            failed ? "text-destructive" : "text-emerald-600 dark:text-emerald-500",
+          )}
+        />
+        <span>
+          Delegated to <b>{name}</b>
+        </span>
+        {resultText && (
+          <ChevronDownIcon
+            className={cn(
+              "ms-auto size-4 shrink-0 transition-transform",
+              !open && "-rotate-90",
+            )}
+          />
+        )}
+      </button>
+      {open && resultText && (
+        <pre className="bg-muted/40 text-muted-foreground mx-3 mb-2 rounded-md p-2.5 text-xs whitespace-pre-wrap">
+          {resultText}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+const StandardToolFallback: ToolCallMessagePartComponent = ({
   toolName,
   argsText,
   result,
@@ -341,7 +512,14 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
 }) => {
   const isCancelled =
     status?.type === "incomplete" && status.reason === "cancelled";
-  const isRequiresAction = status?.type === "requires-action";
+  // Only offer Allow/Deny when this part actually carries an approval
+  // request or interrupt. Tool calls restored from history without their
+  // result would otherwise also report `requires-action` and render
+  // buttons that fake a local result instead of resuming the run.
+  const isRequiresAction =
+    status?.type === "requires-action" &&
+    ((approval != null && approval.approved === undefined) ||
+      interrupt != null);
 
   const [open, setOpen] = useState(isRequiresAction);
   const [prevRequiresAction, setPrevRequiresAction] =

@@ -88,20 +88,41 @@ type MastraMessagePart = {
   };
 };
 
+type PendingToolApproval = {
+  toolCallId: string;
+};
+
 type MastraMessage = {
   id: string;
   role: string;
-  content: { parts?: MastraMessagePart[] };
+  content: {
+    parts?: MastraMessagePart[];
+    metadata?: {
+      pendingToolApprovals?: Record<string, PendingToolApproval>;
+    } | null;
+  };
 };
 
 const toUIMessage = (msg: MastraMessage): UIMessage | null => {
   if (msg.role !== "user" && msg.role !== "assistant") return null;
+  const pendingApprovals = Object.values(
+    msg.content.metadata?.pendingToolApprovals ?? {},
+  );
   const parts: UIMessage["parts"] = [];
   for (const part of msg.content.parts ?? []) {
     if (part.type === "text" && part.text) {
       parts.push({ type: "text", text: part.text });
     } else if (part.type === "tool-invocation" && part.toolInvocation) {
       const ti = part.toolInvocation;
+      // A run suspended waiting for tool approval: restore the part in
+      // `approval-requested` state so Allow/Deny still works after a page
+      // refresh. The approval ID's run-ID half is a placeholder — the
+      // server's chat route rewrites it to the thread's active suspended
+      // run before resuming (see apps/server/src/mastra/chat-route.ts).
+      const pending =
+        ti.state !== "result"
+          ? pendingApprovals.find((p) => p.toolCallId === ti.toolCallId)
+          : undefined;
       parts.push(
         ti.state === "result"
           ? {
@@ -112,13 +133,22 @@ const toUIMessage = (msg: MastraMessage): UIMessage | null => {
               input: ti.args ?? {},
               output: ti.result,
             }
-          : {
-              type: "dynamic-tool",
-              toolName: ti.toolName,
-              toolCallId: ti.toolCallId,
-              state: "input-available",
-              input: ti.args ?? {},
-            },
+          : pending
+            ? {
+                type: "dynamic-tool",
+                toolName: ti.toolName,
+                toolCallId: ti.toolCallId,
+                state: "approval-requested",
+                input: ti.args ?? {},
+                approval: { id: `pending-run::${ti.toolCallId}` },
+              }
+            : {
+                type: "dynamic-tool",
+                toolName: ti.toolName,
+                toolCallId: ti.toolCallId,
+                state: "input-available",
+                input: ti.args ?? {},
+              },
       );
     }
     // reasoning, step-start, data-om-* parts are not useful to restore

@@ -6,9 +6,10 @@ import {
   AssistantChatTransport,
   useChatRuntime,
 } from "@assistant-ui/react-ai-sdk";
-import { lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
+import { isToolUIPart, type UIMessage } from "ai";
 import { Thread } from "@/components/assistant-ui/thread";
 import { ThreadList } from "@/components/assistant-ui/thread-list";
+import { SubagentActivityUI } from "@/components/assistant-ui/subagent-activity";
 import {
   AGENT_ID,
   MASTRA_URL,
@@ -16,6 +17,24 @@ import {
   mastraThreadListAdapter,
   resolveMastraThreadId,
 } from "@/lib/mastra-threads";
+
+/**
+ * Auto-send the follow-up request once every pending approval has been
+ * responded to. Unlike the stock
+ * `lastAssistantMessageIsCompleteWithApprovalResponses`, this ignores tool
+ * parts without output: messages restored from Mastra memory mid-suspension
+ * include earlier tool calls whose results aren't persisted yet, which would
+ * otherwise block the auto-send forever.
+ */
+const allApprovalsResponded = ({ messages }: { messages: UIMessage[] }) => {
+  const last = messages.at(-1);
+  if (last?.role !== "assistant") return false;
+  const toolParts = last.parts.filter(isToolUIPart);
+  return (
+    toolParts.some((p) => p.state === "approval-responded") &&
+    !toolParts.some((p) => p.state === "approval-requested")
+  );
+};
 
 const transport = new AssistantChatTransport({
   api: `${MASTRA_URL}/chat/${AGENT_ID}`,
@@ -44,8 +63,7 @@ const useMastraRuntime = () =>
       return useChatRuntime({
         transport,
         // Auto-send the follow-up request after the user approves/denies a tool call.
-        sendAutomaticallyWhen:
-          lastAssistantMessageIsCompleteWithApprovalResponses,
+        sendAutomaticallyWhen: allApprovalsResponded,
       });
     },
     adapter: mastraThreadListAdapter,
@@ -56,6 +74,8 @@ export const Assistant = () => {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      {/* Registers the live renderer for Mastra's `data-tool-agent` parts. */}
+      <SubagentActivityUI />
       <div className="flex h-dvh overflow-hidden">
         <aside className="border-border bg-muted/30 flex w-[260px] shrink-0 flex-col gap-2 overflow-y-auto border-r p-3">
           <div className="text-muted-foreground px-2 pt-1 text-xs font-semibold tracking-wide uppercase">
