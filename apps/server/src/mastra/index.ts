@@ -8,12 +8,14 @@ import { Observability, MastraStorageExporter, MastraPlatformExporter, Sensitive
 import { chatRoute } from './chat-route';
 import { accountAgent } from './agents/account-agent';
 import { billingAgent } from './agents/billing-agent';
+import { riskAgent } from './agents/risk-agent';
 import { supportAgent } from './agents/support-agent';
 
 export const mastra = new Mastra({
   agents: {
     accountAgent,
     billingAgent,
+    riskAgent,
     supportAgent,
   },
   server: {

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { CheckIcon, ChevronDownIcon, LoaderIcon, WrenchIcon } from "lucide-react";
 import { makeAssistantDataUI } from "@assistant-ui/react";
 import {
@@ -37,7 +37,7 @@ type SubagentResponseMessage = {
   content?: unknown;
 };
 
-type SubagentData = {
+export type SubagentData = {
   /** Subagent name, e.g. "account-agent". */
   id: string;
   text: string;
@@ -75,9 +75,14 @@ const allToolNames = (data: SubagentData): string[] => {
   return [...names];
 };
 
+const isAgentTool = (toolName?: string): boolean =>
+  typeof toolName === "string" && toolName.startsWith("agent-");
+
 /**
- * Collect tool calls/results from the live top-level arrays AND the finalized
- * `steps[]`, so the subagent's tool activity stays visible after completion.
+ * Collect the subagent's OWN tool calls/results from the live top-level arrays
+ * AND the finalized `steps[]`, so the tool activity stays visible after
+ * completion. Nested `agent-*` delegations are excluded here — they render as
+ * nested cards via `collectNestedAgents` instead of flat tool rows.
  */
 const collectTools = (data: SubagentData) => {
   const calls = new Map<string, SubagentToolCall>();
@@ -87,14 +92,140 @@ const collectTools = (data: SubagentData) => {
     cs: SubagentToolCall[] = [],
     rs: SubagentToolResult[] = [],
   ) => {
-    for (const c of cs) if (c?.toolCallId) calls.set(c.toolCallId, c);
-    for (const r of rs) if (r?.toolCallId) results.set(r.toolCallId, r);
+    for (const c of cs)
+      if (c?.toolCallId && !isAgentTool(c.toolName)) calls.set(c.toolCallId, c);
+    for (const r of rs)
+      if (r?.toolCallId && !isAgentTool(r.toolName)) results.set(r.toolCallId, r);
   };
 
   ingest(data.toolCalls, data.toolResults);
   for (const step of data.steps ?? []) ingest(step.toolCalls, step.toolResults);
 
   return { calls: [...calls.values()], results };
+};
+
+/**
+ * A child delegation extracted from a parent subagent's buffer. The probe
+ * (nested-delegation.probe.test.ts) confirmed that when a subagent delegates,
+ * the child surfaces as an `agent-*` tool-call/tool-result pair inside the
+ * parent's `steps[]` and `response.messages` — NOT as its own top-level
+ * `data-tool-agent` part. We reconstruct a `SubagentData` for each child so the
+ * card can recurse and show the full multi-level chain.
+ */
+const agentToolToName = (toolName: string): string =>
+  // "agent-billingAgent" -> "billingAgent"; humanized later.
+  toolName.replace(/^agent-/, "");
+
+type ToolPart = {
+  type?: string;
+  toolCallId?: string;
+  toolName?: string;
+  input?: unknown;
+  args?: unknown;
+  output?: unknown;
+  result?: unknown;
+};
+
+/** Walk a subagent's buffer and return every nested `agent-*` delegation. */
+const collectNestedAgents = (data: SubagentData): SubagentData[] => {
+  const calls = new Map<string, ToolPart>();
+  const results = new Map<string, ToolPart>();
+
+  const consider = (part: ToolPart | undefined) => {
+    if (!part?.toolCallId || !isAgentTool(part.toolName)) return;
+    const hasResult =
+      part.type === "tool-result" || "output" in part || "result" in part;
+    if (hasResult) results.set(part.toolCallId, part);
+    else calls.set(part.toolCallId, part);
+  };
+
+  for (const c of data.toolCalls ?? []) consider(c as ToolPart);
+  for (const r of data.toolResults ?? []) consider(r as ToolPart);
+  for (const step of data.steps ?? []) {
+    for (const c of step.toolCalls ?? []) consider(c as ToolPart);
+    for (const r of step.toolResults ?? []) consider(r as ToolPart);
+  }
+  for (const m of data.response?.messages ?? []) {
+    if (Array.isArray(m.content)) for (const part of m.content) consider(part as ToolPart);
+  }
+
+  const ids = new Set([...calls.keys(), ...results.keys()]);
+  return [...ids].map((id) => {
+    const call = calls.get(id);
+    const result = results.get(id);
+    const output = result?.output ?? result?.result;
+    const promptInput = (call?.input ?? call?.args ?? {}) as { prompt?: string };
+    const outText =
+      typeof output === "string"
+        ? output
+        : (output as { text?: string })?.text ??
+          (output ? JSON.stringify(output, null, 2) : "");
+    return {
+      id: agentToolToName(call?.toolName ?? result?.toolName ?? ""),
+      text: outText,
+      status: result ? "finished" : "running",
+      toolCalls: [],
+      toolResults: [],
+      // The child's own inner output may itself contain a nested delegation;
+      // recursion handles arbitrary depth via `response.messages`.
+      response:
+        output && typeof output === "object"
+          ? (output as SubagentData["response"])
+          : undefined,
+      _childPrompt: promptInput.prompt,
+    } as SubagentData & { _childPrompt?: string };
+  });
+};
+
+/**
+ * Persisted shape of a completed `agent-*` delegation's `output` (a.k.a. the
+ * tool-call `result`). When a delegation finishes, Mastra stores the subagent's
+ * summary here — but the ephemeral `data-tool-agent` progress part is NOT
+ * persisted. So on refresh this `output` is the only record of the delegation.
+ *
+ * It mirrors the live buffer's tail: a `text` summary plus `subAgentToolResults`
+ * (the subagent's own tool calls, incl. any nested `agent-*` delegations) and a
+ * `response.messages` transcript. `restoredOutputToSubagentData` reshapes it
+ * into `SubagentData` so the SAME recursive `SubagentCard` renders it — making
+ * recalled history visually identical to the live card.
+ */
+type RestoredAgentOutput = {
+  text?: string;
+  subAgentToolResults?: SubagentToolResult[];
+  response?: { messages?: SubagentResponseMessage[] };
+};
+
+/**
+ * Convert a persisted `agent-*` tool-call output into the `SubagentData` shape
+ * consumed by `SubagentCard`. `subAgentToolResults` becomes both `toolResults`
+ * and (so the tool rows show their request) synthesized `toolCalls`; nested
+ * `agent-*` results carried inside are surfaced by `collectNestedAgents` via the
+ * same arrays / `response.messages`. Returns null if the output isn't a
+ * recognizable delegation summary.
+ */
+export const restoredOutputToSubagentData = (
+  toolName: string,
+  output: unknown,
+): SubagentData | null => {
+  if (!output || typeof output !== "object") return null;
+  const o = output as RestoredAgentOutput;
+  const toolResults = Array.isArray(o.subAgentToolResults)
+    ? o.subAgentToolResults
+    : [];
+  // Synthesize matching tool-calls so SubagentToolRow can show args + result.
+  const toolCalls: SubagentToolCall[] = toolResults.map((r) => ({
+    toolCallId: r.toolCallId,
+    toolName: r.toolName,
+    args: r.args,
+  }));
+  return {
+    id: agentToolToName(toolName),
+    text: typeof o.text === "string" ? o.text : "",
+    status: "finished",
+    toolCalls,
+    toolResults,
+    response: o.response,
+  };
 };
 
 const humanizeAgentName = (id: string) =>
@@ -171,7 +302,26 @@ const SubagentToolRow = ({
   );
 };
 
-const SubagentActivityImpl = ({ data }: { data: SubagentData }) => {
+// Cap recursion so a malformed/cyclic buffer can't blow the stack.
+const MAX_DEPTH = 4;
+
+export const SubagentCard = ({
+  data,
+  prompt,
+  footer,
+  depth = 0,
+}: {
+  data: SubagentData;
+  prompt?: string;
+  /**
+   * Extra content rendered at the bottom of the card body. Used to slot the
+   * Allow/Deny approval prompt inside the card when a delegation is suspended
+   * waiting on a decision (e.g. restored from history after a page refresh),
+   * so the approver still sees the "Delegating to X" framing and request.
+   */
+  footer?: ReactNode;
+  depth?: number;
+}) => {
   const running = data.status !== "finished";
   // Auto-expand while the subagent is actively working so the rep sees
   // progress; let them collapse it once done.
@@ -179,6 +329,8 @@ const SubagentActivityImpl = ({ data }: { data: SubagentData }) => {
 
   const name = resolveAgentName(data);
   const { calls: toolCalls, results: resultsByCallId } = collectTools(data);
+  const nestedAgents =
+    depth < MAX_DEPTH ? collectNestedAgents(data) : [];
 
   return (
     <Collapsible
@@ -209,6 +361,11 @@ const SubagentActivityImpl = ({ data }: { data: SubagentData }) => {
       </CollapsibleTrigger>
       <CollapsibleContent className="overflow-hidden">
         <div className="flex flex-col gap-1.5 px-3 pb-2.5">
+          {prompt && (
+            <div className="text-muted-foreground/80 text-xs italic">
+              “{prompt}”
+            </div>
+          )}
           {toolCalls.length > 0 && (
             <div className="flex flex-col">
               {toolCalls.map((call) => (
@@ -220,18 +377,35 @@ const SubagentActivityImpl = ({ data }: { data: SubagentData }) => {
               ))}
             </div>
           )}
+          {/* Nested (multi-level) delegations: this subagent itself delegated
+              to another agent. Render each child recursively, indented. */}
+          {nestedAgents.map((child, i) => {
+            const childPrompt = (child as SubagentData & { _childPrompt?: string })
+              ._childPrompt;
+            return (
+              <div
+                key={(child.id || "child") + i}
+                className="border-border/50 ms-1 border-s ps-2"
+              >
+                <SubagentCard data={child} prompt={childPrompt} depth={depth + 1} />
+              </div>
+            );
+          })}
           {data.text && (
             <div className="text-muted-foreground border-border/60 border-s ps-3 text-sm whitespace-pre-wrap">
               {data.text}
             </div>
           )}
+          {footer}
         </div>
       </CollapsibleContent>
     </Collapsible>
   );
 };
 
-const SubagentActivity = memo(SubagentActivityImpl);
+const SubagentActivity = memo(({ data }: { data: SubagentData }) => (
+  <SubagentCard data={data} depth={0} />
+));
 
 /**
  * Registers a renderer for the `data-tool-agent` parts that Mastra streams
