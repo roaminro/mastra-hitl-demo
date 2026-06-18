@@ -6,6 +6,7 @@ import {
   type ThreadHistoryAdapter,
 } from "@assistant-ui/react";
 import { MastraClient } from "@mastra/client-js";
+import { toAISdkMessages } from "@mastra/ai-sdk/ui";
 import type { UIMessage } from "ai";
 
 export const MASTRA_URL =
@@ -76,85 +77,86 @@ const textStream = (text: string) =>
 /* History: load past messages of a thread from Mastra memory          */
 /* ------------------------------------------------------------------ */
 
-type MastraMessagePart = {
-  type: string;
-  text?: string;
-  toolInvocation?: {
-    state: string;
-    toolCallId: string;
-    toolName: string;
-    args?: unknown;
-    result?: unknown;
-  };
-};
-
-type PendingToolApproval = {
-  toolCallId: string;
-};
-
+/** Minimal view of a persisted Mastra message — just what we need to detect
+ *  pending tool approvals that the v6 converter doesn't re-express as an
+ *  `approval-requested` tool part (see `restoreApprovals`). */
 type MastraMessage = {
   id: string;
   role: string;
-  content: {
-    parts?: MastraMessagePart[];
+  content?: {
     metadata?: {
-      pendingToolApprovals?: Record<string, PendingToolApproval>;
+      pendingToolApprovals?: Record<string, { toolCallId?: string }>;
     } | null;
-  };
+  } | null;
 };
 
-const toUIMessage = (msg: MastraMessage): UIMessage | null => {
-  if (msg.role !== "user" && msg.role !== "assistant") return null;
-  const pendingApprovals = Object.values(
-    msg.content.metadata?.pendingToolApprovals ?? {},
-  );
-  const parts: UIMessage["parts"] = [];
-  for (const part of msg.content.parts ?? []) {
-    if (part.type === "text" && part.text) {
-      parts.push({ type: "text", text: part.text });
-    } else if (part.type === "tool-invocation" && part.toolInvocation) {
-      const ti = part.toolInvocation;
-      // A run suspended waiting for tool approval: restore the part in
-      // `approval-requested` state so Allow/Deny still works after a page
-      // refresh. The approval ID's run-ID half is a placeholder — the
-      // server's chat route rewrites it to the thread's active suspended
-      // run before resuming (see apps/server/src/mastra/chat-route.ts).
-      const pending =
-        ti.state !== "result"
-          ? pendingApprovals.find((p) => p.toolCallId === ti.toolCallId)
-          : undefined;
-      parts.push(
-        ti.state === "result"
-          ? {
-              type: "dynamic-tool",
-              toolName: ti.toolName,
-              toolCallId: ti.toolCallId,
-              state: "output-available",
-              input: ti.args ?? {},
-              output: ti.result,
-            }
-          : pending
-            ? {
-                type: "dynamic-tool",
-                toolName: ti.toolName,
-                toolCallId: ti.toolCallId,
-                state: "approval-requested",
-                input: ti.args ?? {},
-                approval: { id: `pending-run::${ti.toolCallId}` },
-              }
-            : {
-                type: "dynamic-tool",
-                toolName: ti.toolName,
-                toolCallId: ti.toolCallId,
-                state: "input-available",
-                input: ti.args ?? {},
-              },
-      );
+/**
+ * Collects the toolCallIds that are still awaiting approval across a thread's
+ * persisted messages. Mastra stores these in message `content.metadata.
+ * pendingToolApprovals`.
+ */
+const collectPendingApprovalToolCallIds = (raw: MastraMessage[]): Set<string> => {
+  const ids = new Set<string>();
+  for (const msg of raw) {
+    const pending = msg.content?.metadata?.pendingToolApprovals;
+    if (!pending) continue;
+    for (const entry of Object.values(pending)) {
+      if (entry?.toolCallId) ids.add(entry.toolCallId);
     }
-    // reasoning, step-start, data-om-* parts are not useful to restore
   }
-  if (parts.length === 0) return null;
-  return { id: msg.id, role: msg.role as UIMessage["role"], parts };
+  return ids;
+};
+
+type ToolPart = Extract<UIMessage["parts"][number], { toolCallId: string }>;
+
+/**
+ * The framework converter (`toAISdkMessages`) re-expresses a suspended approval
+ * as a separate `data-tool-call-approval` *data part* rather than putting the
+ * `agent-*` tool call into `approval-requested` state. Assistant UI's
+ * `ToolFallback` only renders Allow/Deny from a tool part with an `approval`
+ * object, so we upgrade any tool part whose id is still pending into
+ * `approval-requested` here.
+ *
+ * The approval id's run-ID half is a placeholder — the server's chat route
+ * rewrites it to the thread's active suspended run before resuming (see
+ * apps/server/src/mastra/chat-route.ts).
+ */
+const restoreApprovals = (
+  messages: UIMessage[],
+  pendingIds: Set<string>,
+): UIMessage[] => {
+  if (pendingIds.size === 0) return messages;
+  return messages.map((message) => ({
+    ...message,
+    parts: message.parts.map((part) => {
+      const toolPart = part as Partial<ToolPart>;
+      if (
+        typeof toolPart.toolCallId === "string" &&
+        pendingIds.has(toolPart.toolCallId) &&
+        toolPart.state !== "output-available"
+      ) {
+        return {
+          ...part,
+          state: "approval-requested",
+          approval: { id: `pending-run::${toolPart.toolCallId}` },
+        } as UIMessage["parts"][number];
+      }
+      return part;
+    }),
+  }));
+};
+
+/**
+ * Converts persisted Mastra messages to AI SDK v6 UI messages using the
+ * framework's own serializer, then layers the approval-restore patch on top.
+ */
+const toUIMessages = (raw: MastraMessage[]): UIMessage[] => {
+  const pendingIds = collectPendingApprovalToolCallIds(raw);
+  const converted = toAISdkMessages(
+    raw as never,
+    { version: "v6" },
+  ) as UIMessage[];
+  return restoreApprovals(converted, pendingIds);
 };
 
 const createHistoryAdapter = (remoteId: string): ThreadHistoryAdapter => ({
@@ -170,9 +172,9 @@ const createHistoryAdapter = (remoteId: string): ThreadHistoryAdapter => ({
         const { messages } = await client
           .getMemoryThread({ threadId: remoteId, agentId: AGENT_ID })
           .listMessages();
-        const uiMessages = (messages as unknown as MastraMessage[])
-          .map(toUIMessage)
-          .filter((m): m is UIMessage => m !== null);
+        const uiMessages = toUIMessages(
+          messages as unknown as MastraMessage[],
+        );
 
         let parentId: string | null = null;
         const items = uiMessages.map((message) => {

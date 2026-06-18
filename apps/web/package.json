@@ -16,6 +16,7 @@
     "@assistant-ui/react-markdown": "^0.14.2",
     "@base-ui/react": "^1.5.0",
     "@fontsource-variable/geist": "^5.2.9",
+    "@mastra/ai-sdk": "^1.4.4",
     "@mastra/client-js": "^1.23.2",
     "@tailwindcss/vite": "^4.3.0",
     "ai": "^6.0.199",

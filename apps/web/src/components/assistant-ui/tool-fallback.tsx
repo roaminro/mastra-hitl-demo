@@ -22,6 +22,11 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  SubagentCard,
+  restoredOutputToSubagentData,
+  type SubagentData,
+} from "@/components/assistant-ui/subagent-activity";
 
 const ANIMATION_DURATION = 200;
 
@@ -291,11 +296,13 @@ function ToolFallbackApproval({
   const respond = (approved: boolean) => {
     if (submitted) return;
     setSubmitted(true);
-    if (
-      approval != null &&
-      approval.approved === undefined &&
-      respondToApproval
-    ) {
+    // Prefer the native approval channel. `respondToApproval` is scoped to
+    // this part's runtime context, so it resolves the correct pending
+    // approval even when the `approval` object didn't make it onto the
+    // rendered props (happens for the 2nd+ of several parallel approvals on
+    // the same tool). Only fall back to `resume`/`addResult` when there is no
+    // native approval responder at all.
+    if (respondToApproval && (approval == null || approval.approved === undefined)) {
       respondToApproval({ approved });
     } else if (interrupt) {
       resume?.({ approved });
@@ -343,21 +350,46 @@ const humanizeAgentToolName = (toolName: string) =>
  * rendered separately by the `SubagentActivity` data-part renderer, so this
  * intentionally renders just the decision prompt rather than a second card.
  */
+/**
+ * Best-effort human-readable description of what a delegation is asking to do.
+ * The `agent-*` tool input carries a `prompt` field with the rep's instruction
+ * (e.g. "Issue a refund for order ord_2002 in the amount of 60 USD…"), which is
+ * exactly what an approver needs to see. Falls back to the raw args text.
+ */
+function describeDelegation(args: unknown, argsText?: string): string | undefined {
+  if (args && typeof args === "object") {
+    const prompt = (args as Record<string, unknown>).prompt;
+    if (typeof prompt === "string" && prompt.trim()) return prompt.trim();
+  }
+  if (argsText && argsText.trim() && argsText.trim() !== "{}") return argsText.trim();
+  return undefined;
+}
+
 function AgentApprovalPrompt({
   toolName,
+  args,
+  argsText,
   addResult,
   resume,
   interrupt,
   approval,
   respondToApproval,
+  hideDescription = false,
 }: Pick<
   ToolCallMessagePartProps,
   "addResult" | "resume" | "respondToApproval"
 > & {
   toolName: string;
+  args?: unknown;
+  argsText?: string;
   interrupt?: ToolCallMessagePart["interrupt"];
   approval?: ToolCallMessagePart["approval"];
+  /** Suppress the request description (e.g. when an enclosing card shows it). */
+  hideDescription?: boolean;
 }) {
+  const description = hideDescription
+    ? undefined
+    : describeDelegation(args, argsText);
   return (
     <div
       data-slot="agent-approval-prompt"
@@ -369,6 +401,14 @@ function AgentApprovalPrompt({
           <b>{humanizeAgentToolName(toolName)}</b> needs approval to continue
         </span>
       </div>
+      {description && (
+        <p
+          data-slot="agent-approval-description"
+          className="text-muted-foreground border-border/50 ms-6 border-s ps-2.5 text-xs leading-relaxed"
+        >
+          {description}
+        </p>
+      )}
       <ToolFallbackApproval
         addResult={addResult}
         resume={resume}
@@ -401,6 +441,8 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = (props) => {
  */
 const AgentDelegationToolPart: ToolCallMessagePartComponent = ({
   toolName,
+  args,
+  argsText,
   result,
   status,
   addResult,
@@ -409,20 +451,74 @@ const AgentDelegationToolPart: ToolCallMessagePartComponent = ({
   approval,
   respondToApproval,
 }) => {
+  // A delegation awaits a decision whenever the runtime marks it
+  // `requires-action`. With several approvals pending in parallel, the AI SDK
+  // only attaches the `approval` object to one of the same-named tool parts —
+  // the others still report `requires-action` but arrive with `approval` and
+  // `interrupt` undefined. We must still render an Allow/Deny for those, or a
+  // second pending approval silently falls through to the "completed" card.
+  // `respondToApproval` is bound to *this* part's runtime context, so it
+  // resolves the right approval even when the prop is missing.
   const isRequiresAction =
-    status?.type === "requires-action" &&
-    ((approval != null && approval.approved === undefined) ||
-      interrupt != null);
+    status?.type === "requires-action" && result === undefined;
 
   if (isRequiresAction) {
+    // While streaming live, the `SubagentActivity` data-part already renders
+    // the rich "Delegating to X" card with the subagent's in-flight work, so
+    // here we only need the bare Allow/Deny prompt (avoids a duplicate card).
+    //
+    // But after a page refresh the live data-part is gone and the suspended
+    // delegation comes back from history as this `requires-action` tool-call
+    // with no result — previously that left just a floating approval prompt
+    // with no context (see MASTRA_DX_FEEDBACK.md: in-flight delegation progress
+    // isn't persisted at suspend time). Detect the restored case by the
+    // placeholder approval id assigned in `mastra-threads.tsx` and wrap the
+    // prompt in the SAME `SubagentCard` shell — a "Delegating to X" card whose
+    // body shows the request description and hosts the buttons.
+    const isRestoredApproval =
+      typeof approval?.id === "string" && approval.id.startsWith("pending-run::");
+
+    if (!isRestoredApproval) {
+      return (
+        <AgentApprovalPrompt
+          toolName={toolName}
+          args={args}
+          argsText={argsText}
+          addResult={addResult}
+          resume={resume}
+          interrupt={interrupt}
+          approval={approval}
+          respondToApproval={respondToApproval}
+        />
+      );
+    }
+
+    const data: SubagentData = {
+      id: toolName.replace(/^agent-/, ""),
+      text: "",
+      status: "running",
+      toolCalls: [],
+      toolResults: [],
+    };
     return (
-      <AgentApprovalPrompt
-        toolName={toolName}
-        addResult={addResult}
-        resume={resume}
-        interrupt={interrupt}
-        approval={approval}
-        respondToApproval={respondToApproval}
+      <SubagentCard
+        data={data}
+        prompt={describeDelegation(args, argsText)}
+        footer={
+          // The card already shows the request as its prompt, so hide the
+          // prompt's own copy to avoid showing the description twice.
+          <AgentApprovalPrompt
+            toolName={toolName}
+            args={args}
+            argsText={argsText}
+            addResult={addResult}
+            resume={resume}
+            interrupt={interrupt}
+            approval={approval}
+            respondToApproval={respondToApproval}
+            hideDescription
+          />
+        }
       />
     );
   }
@@ -430,73 +526,25 @@ const AgentDelegationToolPart: ToolCallMessagePartComponent = ({
   // Running live: the SubagentActivity data-part renders the rich card.
   if (status?.type === "running") return null;
 
-  // Finished / restored from history: the data-part no longer exists, so show
-  // a compact card with the delegation's output. Without this, a delegation
-  // disappears entirely after a page refresh.
-  return (
-    <AgentDelegationSummary
-      toolName={toolName}
-      result={result}
-      status={status}
-    />
-  );
+  // Finished / restored from history: the live `data-tool-agent` part no longer
+  // exists, so reshape the persisted delegation output into the same
+  // `SubagentData` the live renderer uses and render the SAME recursive
+  // `SubagentCard`. This keeps recalled history visually identical to live —
+  // including nested (multi-level) delegations and the subagent's tool rows.
+  // Without this, a delegation would disappear entirely after a page refresh.
+  return <AgentDelegationSummary toolName={toolName} result={result} />;
 };
 
 function AgentDelegationSummary({
   toolName,
   result,
-  status,
 }: {
   toolName: string;
   result?: unknown;
-  status?: ToolCallMessagePartStatus;
 }) {
-  const [open, setOpen] = useState(false);
-  const failed = status?.type === "incomplete";
-  const Icon = failed ? XCircleIcon : CheckIcon;
-  const name = humanizeAgentToolName(toolName);
-  const resultText =
-    result === undefined
-      ? undefined
-      : typeof result === "string"
-        ? result
-        : JSON.stringify(result, null, 2);
-
-  return (
-    <div
-      data-slot="agent-delegation-summary"
-      className="border-border/60 bg-muted/20 my-1 w-full rounded-lg border"
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="text-foreground hover:bg-muted/40 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors"
-      >
-        <Icon
-          className={cn(
-            "size-4 shrink-0",
-            failed ? "text-destructive" : "text-emerald-600 dark:text-emerald-500",
-          )}
-        />
-        <span>
-          Delegated to <b>{name}</b>
-        </span>
-        {resultText && (
-          <ChevronDownIcon
-            className={cn(
-              "ms-auto size-4 shrink-0 transition-transform",
-              !open && "-rotate-90",
-            )}
-          />
-        )}
-      </button>
-      {open && resultText && (
-        <pre className="bg-muted/40 text-muted-foreground mx-3 mb-2 rounded-md p-2.5 text-xs whitespace-pre-wrap">
-          {resultText}
-        </pre>
-      )}
-    </div>
-  );
+  const data = restoredOutputToSubagentData(toolName, result);
+  if (!data) return null;
+  return <SubagentCard data={data} />;
 }
 
 const StandardToolFallback: ToolCallMessagePartComponent = ({

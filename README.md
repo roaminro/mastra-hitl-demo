@@ -25,7 +25,8 @@ apps/
 | `agents/billing-agent.ts` | Issues refunds via the approval-gated `issue-refund` tool |
 | `tools/support-tools.ts` | `list-customers`, `lookup-customer`, `lookup-orders`, `issue-refund` (with `requireApproval`) |
 | `tools/support-data.ts` | In-memory mock CRM (customers, orders, refunds) |
-| `index.ts` | Registers agents and the Assistant UI chat endpoint: `chatRoute({ path: '/chat/:agentId', version: 'v6' })` |
+| `index.ts` | Registers agents and a custom `POST /chat/:agentId` endpoint (`chat-route.ts`) |
+| `chat-route.ts` | Custom chat route wrapping `handleChatStream`. Rewrites the approval run-ID via `getActiveThreadRunId` with a storage fallback for suspended runs, so approvals can resume after a page refresh or server restart |
 
 ### Web (`apps/web/src/`)
 
@@ -33,7 +34,29 @@ apps/
 | --- | --- |
 | `components/assistant.tsx` | Runtime wiring: AI SDK transport to `http://localhost:4111/chat/support-agent`, approval auto-send, thread-list layout |
 | `lib/mastra-threads.tsx` | Custom `RemoteThreadListAdapter` + history adapter backed by Mastra memory (`@mastra/client-js`) — thread list, titles, rename/archive/delete, and message history survive refresh |
-| `components/assistant-ui/` | Assistant UI components (thread, thread list, tool fallback with Allow/Deny buttons) |
+| `components/assistant-ui/` | Assistant UI components, mostly generated; the customized ones are listed below |
+
+## Assistant UI customizations
+
+Assistant UI ships no Mastra integration and no concept of subagent delegation, so this demo adds custom code on top of the generated components. Notably, the **HITL approval flow needed zero changes to Assistant UI's primitives** — that was all server/transport wiring. The real custom work was bridging Mastra's thread/memory model and rendering subagent delegations.
+
+**Net-new files**
+
+| File | What it adds |
+| --- | --- |
+| `lib/mastra-threads.tsx` | A `RemoteThreadListAdapter` (list/create/rename/archive/unarchive/delete threads via `@mastra/client-js`) and a history adapter that converts `MastraMessage → UIMessage`. Tool calls are restored into `output-available` / `approval-requested` states so a refreshed thread keeps its tool calls and any still-pending Allow/Deny. |
+| `components/assistant-ui/subagent-activity.tsx` | A `makeAssistantDataUI` renderer for Mastra's `data-tool-agent` stream part — the live "Delegating to X" card with nested tool calls/results, plus an agent-name fallback for when Mastra's resume-after-approval stream drops `data.id`. |
+
+**Modified stock components**
+
+| File | Change |
+| --- | --- |
+| `tool-fallback.tsx` | Real HITL approval wiring (`respondToApproval` / `resume` / `addResult`), gated so Allow/Deny only shows on a genuine approval/interrupt (not on history-restored calls). Suppresses duplicate `agent-*` delegation rows (the data-part owns the live card), renders an approval-only prompt for delegations awaiting a decision, and a compact **"Delegated to X"** card so finished delegations survive a page refresh. |
+| `thread.tsx` | Auto-opens a tool group when it contains a tool that `requires-action`, so the approval prompt surfaces without manual expansion. Plus a cosmetic welcome heading. |
+| `thread-list.tsx` | Adds an "Archived" section with unarchive-on-hover (the generated version is a flat list). |
+| `tooltip-icon-button.tsx` | One-line shadcn Base UI compat fix (`delayDuration` → `delay`). |
+
+**Runtime wiring** (`components/assistant.tsx`): `useChatRuntime` + `AssistantChatTransport` pointed at the custom `/chat/:agentId` route, `sendAutomaticallyWhen: allApprovalsResponded` (an approval auto-resumes the run), a fresh `threadId` per page load, and mounting `SubagentActivityUI`.
 
 ## Setup
 
@@ -65,6 +88,7 @@ Threads persist in Mastra memory: refresh the page and the sidebar list, titles,
 ## How the approval flow works
 
 1. `issue-refund` is defined with `requireApproval: true`
-2. When the billing agent calls it, the run suspends and the stream emits a `tool-approval-request` part (requires `chatRoute({ version: 'v6' })`)
-3. Assistant UI renders the prompt; `sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses` posts the decision back automatically
-4. The run resumes and the tool either executes or is rejected
+2. When the billing agent calls it, the run suspends and the stream emits a `tool-approval-request` part
+3. Assistant UI renders the prompt; `sendAutomaticallyWhen: allApprovalsResponded` posts the decision back automatically
+4. The custom chat route resolves the suspended run (via `getActiveThreadRunId`, falling back to storage) and resumes it; the tool either executes or is rejected
+5. Because the suspended run is looked up from storage, a page refresh or server restart mid-approval still resumes correctly
