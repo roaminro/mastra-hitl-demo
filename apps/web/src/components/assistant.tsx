@@ -10,6 +10,7 @@ import { isToolUIPart, type UIMessage } from "ai";
 import { Thread } from "@/components/assistant-ui/thread";
 import { ThreadList } from "@/components/assistant-ui/thread-list";
 import { SubagentActivityUI } from "@/components/assistant-ui/subagent-activity";
+import { OmActivityUI } from "@/components/assistant-ui/om-activity";
 import {
   AGENT_ID,
   MASTRA_URL,
@@ -76,6 +77,8 @@ export const Assistant = () => {
     <AssistantRuntimeProvider runtime={runtime}>
       {/* Registers the live renderer for Mastra's `data-tool-agent` parts. */}
       <SubagentActivityUI />
+      {/* Registers renderers for Mastra's `data-om-*` (Observational Memory) parts. */}
+      <OmActivityUI />
       <div className="flex h-dvh overflow-hidden">
         <aside className="border-border bg-muted/30 flex w-[260px] shrink-0 flex-col gap-2 overflow-y-auto border-r p-3">
           <div className="text-muted-foreground px-2 pt-1 text-xs font-semibold tracking-wide uppercase">

@@ -20,10 +20,11 @@ apps/
 
 | File | Purpose |
 | --- | --- |
-| `agents/support-agent.ts` | Supervisor. Delegates to subagents; observational memory enabled (4k-token observation threshold, async buffering, temporal markers) |
-| `agents/account-agent.ts` | Lists/looks up customers, plans, orders, refund history |
-| `agents/billing-agent.ts` | Issues refunds via the approval-gated `issue-refund` tool |
-| `tools/support-tools.ts` | `list-customers`, `lookup-customer`, `lookup-orders`, `issue-refund` (with `requireApproval`) |
+| `agents/support-agent.ts` | Supervisor. Delegates to subagents; observational memory enabled (3k-token observation threshold, async buffering, temporal markers, **retrieval mode** so compacted detail stays recallable) |
+| `agents/account-agent.ts` | Lists/looks up customers, plans, orders, refund history; pulls full ticket history via `fetch-account-history` |
+| `agents/billing-agent.ts` | Issues refunds via the approval-gated `issue-refund` tool; runs a nested `risk-agent` risk check first |
+| `agents/risk-agent.ts` | Nested subagent. Read-only fraud/abuse risk assessment for a refund |
+| `tools/support-tools.ts` | `list-customers`, `lookup-customer`, `lookup-orders`, `fetch-account-history` (large payload — triggers OM compaction), `risk-check`, `issue-refund` (with `requireApproval`) |
 | `tools/support-data.ts` | In-memory mock CRM (customers, orders, refunds) |
 | `index.ts` | Registers agents and a custom `POST /chat/:agentId` endpoint (`chat-route.ts`) |
 | `chat-route.ts` | Custom chat route wrapping `handleChatStream`. Rewrites the approval run-ID via `getActiveThreadRunId` with a storage fallback for suspended runs, so approvals can resume after a page refresh or server restart |
@@ -84,6 +85,12 @@ Open the web UI (Vite prints the port) and try:
 3. Click **Allow** — the refund executes and the result streams back; **Deny** cancels it
 
 Threads persist in Mastra memory: refresh the page and the sidebar list, titles, and full history (including past approvals) are restored. Archived threads appear in an "Archived" section and can be unarchived.
+
+### Seeing Observational Memory compact
+
+OM compacts the context window once a thread's messages cross the observation threshold (3k tokens here). To trigger it in one turn: **"pull the full account history for cust_002 and give me a thorough rundown of every ticket"**. The `fetch-account-history` tool returns a large payload (~5k tokens), so the Observer fires, compresses the raw messages into a dense observation log (~15× smaller), and evicts them from the window.
+
+The thread renders the lifecycle inline via `om-activity.tsx`: **Memory compacted** (`data-om-observation-end`, with the token reduction) and **Memory activated** (`data-om-activation`, when raw messages are evicted). Only these terminal events are shown — Mastra emits OM lifecycle as separate, id-less stream parts, so an "in-progress" card (`observation-start`) can't be reconciled onto its completion and would spin forever; `data-om-status` fires every step and would stack. Because `retrieval: true` is set, nothing is truly lost — a follow-up like *"what was the exact ticketId of the 7th ticket?"* makes the agent call its `recall` tool to page back to the verbatim source.
 
 ## How the approval flow works
 

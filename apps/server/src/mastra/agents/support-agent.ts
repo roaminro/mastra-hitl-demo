@@ -33,7 +33,17 @@ Report only what your tools and teammates actually return — never invent
 IDs, approvers, or timestamps. Use what you remember from previous
 tickets: reference customers the rep has handled before and don't re-ask
 for information you already have. Be concise and factual, like a good
-internal tool.`,
+internal tool.
+
+Your memory is summarized over time, so older details (full ticket
+histories, exact order IDs, amounts, dates, and prior wording) may have
+been compacted out of what you can see directly. You have a "recall" tool
+that pages back to the original, un-summarized messages. When a rep asks
+for an EXACT or verbatim value — a specific ID, amount, date, or the
+precise wording of something said earlier — and it isn't already in front
+of you, use the recall tool to retrieve the source rather than answering
+from your summary. Never paraphrase a value the rep asked for exactly, and
+never claim a detail is unavailable before checking recall.`,
   model: 'openrouter/openai/gpt-5.4-mini',
   agents: { accountAgent, billingAgent },
   memory: new Memory({
@@ -45,14 +55,24 @@ internal tool.`,
         // scope: 'resource',
         // Anchor observations in time ("customer returned after 2 days").
         temporalMarkers: true,
+        // Retrieval mode (experimental): keep each observation group linked
+        // to the raw messages it was compressed from, and register a `recall`
+        // tool so the agent can page back to exact wording / tool output when
+        // the summary dropped it. This means a large tool result (e.g. a full
+        // account history) can trigger compaction WITHOUT permanently losing
+        // the verbatim IDs and amounts a support rep depends on.
+        retrieval: true,
         observation: {
           // Low threshold so the Observer visibly kicks in during a demo
-          // (default is 30k tokens).
-          messageTokens: 4_000,
+          // (default is 30k tokens). One `fetch-account-history` pull is
+          // enough to cross this and trigger compaction + activation.
+          messageTokens: 3_000,
           // Async buffering: observe in the background every 25% of the
-          // threshold (1k tokens) so activation at 4k is instant instead
-          // of a blocking Observer call.
+          // threshold so activation is instant instead of a blocking call.
           bufferTokens: 0.25,
+          // Keep less raw history after activation so the eviction (and the
+          // resulting "Memory activated" event) is clearly visible in a demo.
+          bufferActivation: 0.5,
         },
       },
     },
