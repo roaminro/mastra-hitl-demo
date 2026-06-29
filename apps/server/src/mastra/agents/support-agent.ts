@@ -46,6 +46,9 @@ from your summary. Never paraphrase a value the rep asked for exactly, and
 never claim a detail is unavailable before checking recall.`,
   model: 'openrouter/openai/gpt-5.4-mini',
   agents: { accountAgent, billingAgent },
+  defaultOptions: {
+    maxSteps: 20
+  },
   memory: new Memory({
     options: {
       observationalMemory: {
