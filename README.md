@@ -1,12 +1,13 @@
 # Support Copilot — Mastra HITL Demo
 
-A customer-support copilot demonstrating three [Mastra](https://mastra.ai) capabilities working together:
+A customer-support copilot demonstrating four [Mastra](https://mastra.ai) capabilities working together:
 
-- **Subagents** — a supervisor `support-agent` delegates to an `account-agent` (CRM lookups) and a `billing-agent` (refunds)
-- **Human-in-the-loop approvals** — the refund tool requires approval; the chat UI shows an Allow/Deny prompt before any money moves
-- **Observational memory** — the supervisor remembers customers and past tickets across conversations
+- **Subagents** — a supervisor `support-agent` delegates to an `account-agent` (CRM lookups), a `billing-agent` (refunds, which itself runs a nested `risk-agent`), and a `notifications-agent` (customer emails)
+- **Human-in-the-loop approvals** — side-effecting tools (refunds, sending an email) require approval; the chat UI shows an Allow/Deny prompt before anything happens
+- **Observational memory** — the supervisor compacts long threads and remembers customers and past tickets, with a `recall` tool so verbatim detail is never lost
+- **MCP** — the `notifications-agent` reaches its email tools through a Mastra MCP server/client, with approval gated on the client per-tool
 
-The story: an internal support rep chats with the copilot to handle customer tickets. Lookups are free, but refunds suspend the run until the rep explicitly approves them in the UI.
+The story: an internal support rep chats with the copilot to handle customer tickets. Lookups are free, but refunds and customer emails suspend the run until the rep explicitly approves them in the UI.
 
 ## Structure
 
@@ -24,9 +25,12 @@ apps/
 | `agents/account-agent.ts` | Lists/looks up customers, plans, orders, refund history; pulls full ticket history via `fetch-account-history` |
 | `agents/billing-agent.ts` | Issues refunds via the approval-gated `issue-refund` tool; runs a nested `risk-agent` risk check first |
 | `agents/risk-agent.ts` | Nested subagent. Read-only fraud/abuse risk assessment for a refund |
+| `agents/notifications-agent.ts` | Subagent that sends customer emails through the notifications MCP server; resolves its MCP tools lazily (per request) |
+| `mcp/notifications-server.ts` | A Mastra `MCPServer` exposing `send-customer-email` (side-effecting) and `list-sent-emails` (read-only). Registered on the Mastra instance, so it's served at `/api/mcp/notifications-server/mcp` |
+| `mcp/notifications-client.ts` | A Mastra `MCPClient` connecting to that server with a per-tool `requireToolApproval` predicate — sends need approval, reads don't |
 | `tools/support-tools.ts` | `list-customers`, `lookup-customer`, `lookup-orders`, `fetch-account-history` (large payload — triggers OM compaction), `risk-check`, `issue-refund` (with `requireApproval`) |
 | `tools/support-data.ts` | In-memory mock CRM (customers, orders, refunds) |
-| `index.ts` | Registers agents and a custom `POST /chat/:agentId` endpoint (`chat-route.ts`) |
+| `index.ts` | Registers agents, the MCP server, and a custom `POST /chat/:agentId` endpoint (`chat-route.ts`) |
 | `chat-route.ts` | Custom chat route wrapping `handleChatStream`. Rewrites the approval run-ID via `getActiveThreadRunId` with a storage fallback for suspended runs, so approvals can resume after a page refresh or server restart |
 
 ### Web (`apps/web/src/`)
@@ -83,6 +87,7 @@ Open the web UI (Vite prints the port) and try:
 1. "list customers please" — supervisor delegates to the account agent
 2. "customer dana@example.com wants a refund on ord_1002, defective" — supervisor delegates to the billing agent, the run **suspends**, and Allow/Deny buttons appear
 3. Click **Allow** — the refund executes and the result streams back; **Deny** cancels it
+4. "email dana@example.com to confirm the refund" — supervisor delegates to the notifications agent, which calls the MCP `send-customer-email` tool; it **suspends** for approval the same way before the email is sent
 
 Threads persist in Mastra memory: refresh the page and the sidebar list, titles, and full history (including past approvals) are restored. Archived threads appear in an "Archived" section and can be unarchived.
 
@@ -94,8 +99,14 @@ The thread renders the lifecycle inline via `om-activity.tsx`: **Memory compacte
 
 ## How the approval flow works
 
-1. `issue-refund` is defined with `requireApproval: true`
-2. When the billing agent calls it, the run suspends and the stream emits a `tool-approval-request` part
-3. Assistant UI renders the prompt; `sendAutomaticallyWhen: allApprovalsResponded` posts the decision back automatically
-4. The custom chat route resolves the suspended run (via `getActiveThreadRunId`, falling back to storage) and resumes it; the tool either executes or is rejected
-5. Because the suspended run is looked up from storage, a page refresh or server restart mid-approval still resumes correctly
+Two tools are approval-gated, each via a different Mastra mechanism:
+
+- **`issue-refund`** (a normal Mastra tool) is defined with `requireApproval: true`.
+- **`send-customer-email`** (an MCP tool) is gated on the `MCPClient` with a per-tool `requireToolApproval` predicate, so the read-only `list-sent-emails` tool runs freely while sends require approval.
+
+Either way, the flow downstream is identical:
+
+1. When a subagent calls the gated tool, the run suspends and the stream emits a `tool-approval-request` part
+2. Assistant UI renders the prompt; `sendAutomaticallyWhen: allApprovalsResponded` posts the decision back automatically
+3. The custom chat route resolves the suspended run (via `getActiveThreadRunId`, falling back to storage) and resumes it; the tool either executes or is rejected
+4. Because the suspended run is looked up from storage, a page refresh or server restart mid-approval still resumes correctly
