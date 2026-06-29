@@ -10,6 +10,8 @@ import { accountAgent } from './agents/account-agent';
 import { billingAgent } from './agents/billing-agent';
 import { riskAgent } from './agents/risk-agent';
 import { supportAgent } from './agents/support-agent';
+import { notificationsAgent } from './agents/notifications-agent';
+import { notificationsServer } from './mcp/notifications-server';
 
 export const mastra = new Mastra({
   agents: {
@@ -17,6 +19,10 @@ export const mastra = new Mastra({
     billingAgent,
     riskAgent,
     supportAgent,
+    notificationsAgent,
+  },
+  mcpServers: {
+    notificationsServer,
   },
   server: {
     apiRoutes: [chatRoute],

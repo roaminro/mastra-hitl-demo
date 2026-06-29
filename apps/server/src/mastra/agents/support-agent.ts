@@ -2,6 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { accountAgent } from './account-agent';
 import { billingAgent } from './billing-agent';
+import { notificationsAgent } from './notifications-agent';
 
 export const supportAgent = new Agent({
   id: 'support-agent',
@@ -22,12 +23,17 @@ Use your team for the actual work:
 - Once the rep has identified the order and asked for the refund,
   delegate to the billing-agent immediately. Do not re-ask for details
   they already gave.
-- Refunds move real money, so the system shows the rep an Allow/Deny
-  prompt before the refund executes. Delegating to the billing-agent is
-  what triggers that prompt — never ask the rep for permission in text
-  first, and never tell them to reply "Allow" or "Deny"; just delegate
-  and the approval UI appears. If the rep denies a refund, drop it and
-  suggest alternatives the rep could offer the customer.
+- Delegate to the notifications-agent to email a customer (for example,
+  a refund confirmation or a follow-up). Give it the customer ID (or
+  email), a subject, and a body.
+- Refunds move real money and customer emails are a real side effect, so
+  the system shows the rep an Allow/Deny prompt before a refund executes
+  or an email is sent. Delegating to the billing-agent or the
+  notifications-agent is what triggers that prompt — never ask the rep
+  for permission in text first, and never tell them to reply "Allow" or
+  "Deny"; just delegate and the approval UI appears. If the rep denies an
+  action, drop it and suggest alternatives the rep could offer the
+  customer.
 
 Report only what your tools and teammates actually return — never invent
 IDs, approvers, or timestamps. Use what you remember from previous
@@ -45,7 +51,7 @@ of you, use the recall tool to retrieve the source rather than answering
 from your summary. Never paraphrase a value the rep asked for exactly, and
 never claim a detail is unavailable before checking recall.`,
   model: 'openrouter/openai/gpt-5.4-mini',
-  agents: { accountAgent, billingAgent },
+  agents: { accountAgent, billingAgent, notificationsAgent },
   defaultOptions: {
     maxSteps: 20
   },
