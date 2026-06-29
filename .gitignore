@@ -2,3 +2,11 @@ node_modules/
 dist/
 .env
 .mastra/
+
+# Internal DX feedback / issue investigations — kept local, not part of the public demo
+FIX_PARALLEL_DELEGATION_RESUME.md
+INVESTIGATION_RUNID_FIX_SCOPING.md
+ISSUE_DURABLE_RUN_DISCOVERY.md
+ISSUE_PARALLEL_DELEGATION_COLLISION.md
+MASTRA_DX_FEEDBACK.md
+REVIEW_PR_17898_DURABLE_DISCOVERY.md
