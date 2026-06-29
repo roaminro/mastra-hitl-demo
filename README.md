@@ -82,20 +82,42 @@ pnpm typecheck    # both apps
 pnpm build        # both apps
 ```
 
-Open the web UI (Vite prints the port) and try:
+Open the web UI (Vite prints the port). Copy/paste the prompts below to exercise each feature.
 
-1. "list customers please" — supervisor delegates to the account agent
-2. "customer dana@example.com wants a refund on ord_1002, defective" — supervisor delegates to the billing agent, the run **suspends**, and Allow/Deny buttons appear
-3. Click **Allow** — the refund executes and the result streams back; **Deny** cancels it
-4. "email dana@example.com to confirm the refund" — supervisor delegates to the notifications agent, which calls the MCP `send-customer-email` tool; it **suspends** for approval the same way before the email is sent
+## Example prompts
+
+The mock CRM has two customers: **Dana Reyes** (`cust_001`, `dana@example.com`) with orders `ord_1001` ($240) and `ord_1002` ($60), and **Sam Okafor** (`cust_002`, `sam@example.com`) with orders `ord_2001`/`ord_2002` ($900 each) and `ord_2003` ($1500).
+
+**Subagent delegation (no approval)**
+
+- `list customers please` — supervisor delegates to the account agent
+- `what plan is sam@example.com on and what are his recent orders?` — account-agent lookup
+- `pull up dana@example.com's account` — CRM lookup with refund history
+
+**Human-in-the-loop refund approval**
+
+- `customer dana@example.com wants a refund on ord_1002, defective` — supervisor delegates to the billing agent (which runs a nested risk check first), the run **suspends**, and **Allow/Deny** buttons appear. Click **Allow** to execute the refund or **Deny** to cancel it.
+- `refund sam@example.com 1500 for ord_2003, onboarding cancelled` — same flow with a larger amount
+
+**Human-in-the-loop email approval (via MCP)**
+
+- `email dana@example.com to confirm her refund` — supervisor delegates to the notifications agent, which calls the MCP `send-customer-email` tool; it **suspends** for approval the same way before the email is sent
+- `what emails have we sent to dana@example.com?` — the read-only `list-sent-emails` MCP tool runs **without** an approval prompt
+
+**Observational memory compaction + recall** (do these as two turns in the same thread)
+
+1. `pull the full account history for cust_002 and give me a thorough rundown of every ticket` — the large `fetch-account-history` payload crosses the 3k-token threshold, so memory **compacts** (watch for the "Memory compacted" / "Memory activated" cards)
+2. `what was the exact ticketId of the 7th ticket?` — the detail was compacted out of the window, so the agent calls its `recall` tool to page back to the verbatim source
 
 Threads persist in Mastra memory: refresh the page and the sidebar list, titles, and full history (including past approvals) are restored. Archived threads appear in an "Archived" section and can be unarchived.
 
-### Seeing Observational Memory compact
+### How Observational Memory compaction works
 
-OM compacts the context window once a thread's messages cross the observation threshold (3k tokens here). To trigger it in one turn: **"pull the full account history for cust_002 and give me a thorough rundown of every ticket"**. The `fetch-account-history` tool returns a large payload (~5k tokens), so the Observer fires, compresses the raw messages into a dense observation log (~15× smaller), and evicts them from the window.
+Run the two-turn OM prompt from [Example prompts](#example-prompts) to see this in action.
 
-The thread renders the lifecycle inline via `om-activity.tsx`: **Memory compacted** (`data-om-observation-end`, with the token reduction) and **Memory activated** (`data-om-activation`, when raw messages are evicted). Only these terminal events are shown — Mastra emits OM lifecycle as separate, id-less stream parts, so an "in-progress" card (`observation-start`) can't be reconciled onto its completion and would spin forever; `data-om-status` fires every step and would stack. Because `retrieval: true` is set, nothing is truly lost — a follow-up like *"what was the exact ticketId of the 7th ticket?"* makes the agent call its `recall` tool to page back to the verbatim source.
+OM compacts the context window once a thread's messages cross the observation threshold (3k tokens here). The `fetch-account-history` tool returns a large payload (~5k tokens), so the Observer fires, compresses the raw messages into a dense observation log (~15× smaller), and evicts them from the window.
+
+The thread renders the lifecycle inline via `om-activity.tsx`: **Memory compacted** (`data-om-observation-end`, with the token reduction) and **Memory activated** (`data-om-activation`, when raw messages are evicted). Only these terminal events are shown — Mastra emits OM lifecycle as separate, id-less stream parts, so an "in-progress" card (`observation-start`) can't be reconciled onto its completion and would spin forever; `data-om-status` fires every step and would stack. Because `retrieval: true` is set, nothing is truly lost — the verbatim-detail follow-up makes the agent call its `recall` tool to page back to the source.
 
 ## How the approval flow works
 
