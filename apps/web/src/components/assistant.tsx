@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import {
   AssistantRuntimeProvider,
   useRemoteThreadListRuntime,
@@ -12,7 +13,8 @@ import { ThreadList } from "@/components/assistant-ui/thread-list";
 import { SubagentActivityUI } from "@/components/assistant-ui/subagent-activity";
 import { OmActivityUI } from "@/components/assistant-ui/om-activity";
 import {
-  AGENT_ID,
+  AGENTS,
+  DEFAULT_AGENT_ID,
   MASTRA_URL,
   RESOURCE_ID,
   mastraThreadListAdapter,
@@ -37,28 +39,38 @@ const allApprovalsResponded = ({ messages }: { messages: UIMessage[] }) => {
   );
 };
 
-const transport = new AssistantChatTransport({
-  api: `${MASTRA_URL}/chat/${AGENT_ID}`,
-  prepareSendMessagesRequest: (options) => ({
-    body: {
-      ...options.body,
-      id: options.id,
-      messages: options.messages,
-      trigger: options.trigger,
-      messageId: options.messageId,
-      metadata: options.requestMetadata,
-      // Each assistant-ui thread maps to its own Mastra memory thread.
-      memory: {
-        thread: resolveMastraThreadId(options.id),
-        resource: RESOURCE_ID,
+/**
+ * The chat transport targets `/chat/:agentId`. The thread list and memory are
+ * scoped by RESOURCE_ID (not by agent) in Mastra storage, so switching the
+ * agent only changes which agent answers — the shared thread list and history
+ * are unchanged. The transport is rebuilt whenever the selected agent changes.
+ */
+const buildTransport = (agentId: string) =>
+  new AssistantChatTransport({
+    api: `${MASTRA_URL}/chat/${agentId}`,
+    prepareSendMessagesRequest: (options) => ({
+      body: {
+        ...options.body,
+        id: options.id,
+        messages: options.messages,
+        trigger: options.trigger,
+        messageId: options.messageId,
+        metadata: options.requestMetadata,
+        // Each assistant-ui thread maps to its own Mastra memory thread.
+        memory: {
+          thread: resolveMastraThreadId(options.id),
+          resource: RESOURCE_ID,
+        },
       },
-    },
-  }),
-});
+    }),
+  });
 
-const useMastraRuntime = () =>
+const useMastraRuntime = (agentId: string) =>
   useRemoteThreadListRuntime({
     runtimeHook: function RuntimeHook() {
+      // Rebuild the transport when the selected agent changes so the chat
+      // route URL follows the selection.
+      const transport = useMemo(() => buildTransport(agentId), [agentId]);
       // Nested inside useRemoteThreadListRuntime, this acts as a plain
       // per-thread chat runtime (allowNesting).
       return useChatRuntime({
@@ -71,7 +83,8 @@ const useMastraRuntime = () =>
   });
 
 export const Assistant = () => {
-  const runtime = useMastraRuntime();
+  const [agentId, setAgentId] = useState<string>(DEFAULT_AGENT_ID);
+  const runtime = useMastraRuntime(agentId);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -81,7 +94,27 @@ export const Assistant = () => {
       <OmActivityUI />
       <div className="flex h-dvh overflow-hidden">
         <aside className="border-border bg-muted/30 flex w-[260px] shrink-0 flex-col gap-2 overflow-y-auto border-r p-3">
-          <div className="text-muted-foreground px-2 pt-1 text-xs font-semibold tracking-wide uppercase">
+          <div className="flex flex-col gap-1 px-2 pt-1">
+            <label
+              htmlFor="agent-select"
+              className="text-muted-foreground text-xs font-semibold tracking-wide uppercase"
+            >
+              Agent
+            </label>
+            <select
+              id="agent-select"
+              value={agentId}
+              onChange={(e) => setAgentId(e.target.value)}
+              className="border-border bg-background focus-visible:ring-ring rounded-md border px-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:outline-none"
+            >
+              {AGENTS.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="text-muted-foreground px-2 pt-2 text-xs font-semibold tracking-wide uppercase">
             Tickets
           </div>
           <ThreadList />

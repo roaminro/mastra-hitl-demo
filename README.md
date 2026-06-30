@@ -6,8 +6,9 @@ A customer-support copilot demonstrating four [Mastra](https://mastra.ai) capabi
 - **Human-in-the-loop approvals** — side-effecting tools (refunds, sending an email) require approval; the chat UI shows an Allow/Deny prompt before anything happens
 - **Observational memory** — the supervisor compacts long threads and remembers customers and past tickets, with a `recall` tool so verbatim detail is never lost
 - **MCP** — the `notifications-agent` reaches its email tools through a Mastra MCP server/client, with approval gated on the client per-tool
+- **Dynamic tool discovery** — a standalone `tools-agent` starts with no tools loaded and finds the right one on demand via Mastra's `ToolSearchProcessor`. Its searchable library mixes local CRM tools with MCP tools, and the approval-gated MCP send tool still suspends when discovered this way — so discovery and HITL compose
 
-The story: an internal support rep chats with the copilot to handle customer tickets. Lookups are free, but refunds and customer emails suspend the run until the rep explicitly approves them in the UI.
+The story: an internal support rep chats with the copilot to handle customer tickets. Lookups are free, but refunds and customer emails suspend the run until the rep explicitly approves them in the UI. The sidebar also exposes a separate **tool-search demo** agent.
 
 ## Structure
 
@@ -26,6 +27,7 @@ apps/
 | `agents/billing-agent.ts` | Issues refunds via the approval-gated `issue-refund` tool; runs a nested `risk-agent` risk check first |
 | `agents/risk-agent.ts` | Nested subagent. Read-only fraud/abuse risk assessment for a refund |
 | `agents/notifications-agent.ts` | Subagent that sends customer emails through the notifications MCP server; resolves its MCP tools lazily (per request) |
+| `agents/tools-agent.ts` | Standalone demo of `ToolSearchProcessor`. Starts with `tools: {}` and an input processor holding a searchable library of local CRM tools **plus the MCP notification tools** (resolved via `notificationsClient.listTools()`) behind `search_tools`; `storage: 'context'` (restart-safe loaded-tool state) and `search.autoLoad: true` (matched tools activate immediately, no `load_tool` step). The processor is built lazily per request (cached) because the MCP fetch connects to a server that may not be up at module load |
 | `mcp/notifications-server.ts` | A Mastra `MCPServer` exposing `send-customer-email` (side-effecting) and `list-sent-emails` (read-only). Registered on the Mastra instance, so it's served at `/api/mcp/notifications-server/mcp` |
 | `mcp/notifications-client.ts` | A Mastra `MCPClient` connecting to that server with a per-tool `requireToolApproval` predicate — sends need approval, reads don't |
 | `tools/support-tools.ts` | `list-customers`, `lookup-customer`, `lookup-orders`, `fetch-account-history` (large payload — triggers OM compaction), `risk-check`, `issue-refund` (with `requireApproval`) |
@@ -37,8 +39,8 @@ apps/
 
 | File | Purpose |
 | --- | --- |
-| `components/assistant.tsx` | Runtime wiring: AI SDK transport to `http://localhost:4111/chat/support-agent`, approval auto-send, thread-list layout |
-| `lib/mastra-threads.tsx` | Custom `RemoteThreadListAdapter` + history adapter backed by Mastra memory (`@mastra/client-js`) — thread list, titles, rename/archive/delete, and message history survive refresh |
+| `components/assistant.tsx` | Runtime wiring: AI SDK transport to the custom `/chat/:agentId` route, approval auto-send, thread-list layout, and a sidebar **agent selector** that retargets the transport between the support copilot and the tool-search demo |
+| `lib/mastra-threads.tsx` | Custom `RemoteThreadListAdapter` + history adapter backed by Mastra memory (`@mastra/client-js`) — thread list, titles, rename/archive/delete, and message history survive refresh. Also exports the selectable `AGENTS` list |
 | `components/assistant-ui/` | Assistant UI components, mostly generated; the customized ones are listed below |
 
 ## Assistant UI customizations
@@ -62,6 +64,14 @@ Assistant UI ships no Mastra integration and no concept of subagent delegation, 
 | `tooltip-icon-button.tsx` | One-line shadcn Base UI compat fix (`delayDuration` → `delay`). |
 
 **Runtime wiring** (`components/assistant.tsx`): `useChatRuntime` + `AssistantChatTransport` pointed at the custom `/chat/:agentId` route, `sendAutomaticallyWhen: allApprovalsResponded` (an approval auto-resumes the run), a fresh `threadId` per page load, and mounting `SubagentActivityUI`.
+
+### Agent selector + tool-search demo
+
+The sidebar has an **Agent** dropdown that switches which agent answers — the *Support copilot* or the *Tool search demo*. Selecting an agent rebuilds the `AssistantChatTransport` so its `/chat/:agentId` URL follows the choice; everything else is unchanged. The thread list, titles, and history are **shared** across agents because Mastra scopes memory threads by `resourceId` (`rep_001`), not by agent — so switching agents keeps the same ticket list, and a conversation can contain turns from either agent.
+
+The *Tool search demo* points at `tools-agent`, which has no tools loaded up front. It calls the `search_tools` meta-tool to find a tool by keywords, the match is auto-activated (no `load_tool` step), and it answers on the next turn. Because the processor uses `storage: 'context'`, an already-discovered tool stays loaded for later turns in the same thread — a follow-up lookup skips the search and goes straight to the tool.
+
+The library isn't just local tools: the MCP notification tools are spread into it via `notificationsClient.listTools()`, which returns the same `Record<string, Tool>` shape the processor expects. The key point is that the two mechanisms operate at different layers and compose — `ToolSearchProcessor` controls *discovery*, while the `MCPClient`'s per-tool `requireToolApproval` controls *execution*. So the agent can search for and auto-load `send-customer-email`, but calling it still suspends for approval, while the read-only `list-sent-emails` runs freely. (One nuance of `storage: 'context'`: a loaded tool only stays loaded while its `search_tools` result is in the message window, so a brand-new turn may re-search before sending.)
 
 ## Setup
 
@@ -108,6 +118,14 @@ The mock CRM has two customers: **Dana Reyes** (`cust_001`, `dana@example.com`) 
 
 1. `pull the full account history for cust_002 and give me a thorough rundown of every ticket` — the large `fetch-account-history` payload crosses the 3k-token threshold, so memory **compacts** (watch for the "Memory compacted" / "Memory activated" cards)
 2. `what was the exact ticketId of the 7th ticket?` — the detail was compacted out of the window, so the agent calls its `recall` tool to page back to the verbatim source
+
+**Dynamic tool discovery** (switch the sidebar **Agent** dropdown to *Tool search demo* first)
+
+- `look up dana@example.com and tell me her plan` — the agent calls `search_tools`, the matched `lookup-customer` tool auto-loads, and it answers (**Dana Reyes — Pro plan**)
+- `now what's the refund risk on ord_2001 at $1500?` — a different query searches and auto-loads `risk-check` instead
+- ask a second customer lookup in the same thread — it reuses the already-loaded tool and skips the search (`storage: 'context'`)
+- `email sam@example.com to confirm his refund on ord_2003 was processed` — `search_tools` finds and auto-loads the **MCP** `send-customer-email` tool, then calling it **suspends** for approval (**Allow/Deny**). If it stops after the search, nudge it with `send it now`
+- `what emails have we sent to sam@example.com?` — searches and auto-loads the read-only MCP `list-sent-emails` tool, which runs **without** an approval prompt
 
 Threads persist in Mastra memory: refresh the page and the sidebar list, titles, and full history (including past approvals) are restored. Archived threads appear in an "Archived" section and can be unarchived.
 

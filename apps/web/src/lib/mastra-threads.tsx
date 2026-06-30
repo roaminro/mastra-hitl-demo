@@ -11,7 +11,19 @@ import type { UIMessage } from "ai";
 
 export const MASTRA_URL =
   import.meta.env.VITE_MASTRA_URL ?? "http://localhost:4111";
-export const AGENT_ID = "support-agent";
+
+/** Agents the user can chat with from the sidebar selector. */
+export const AGENTS = [
+  { id: "support-agent", label: "Support copilot" },
+  { id: "tools-agent", label: "Tool search demo" },
+] as const;
+
+export const DEFAULT_AGENT_ID = AGENTS[0].id;
+
+// Thread list, titles, and history are scoped by RESOURCE_ID (not by agent) in
+// Mastra storage, so a single agentId owns the shared thread management calls
+// regardless of which agent is currently answering.
+export const AGENT_ID = DEFAULT_AGENT_ID;
 // Demo identity: one resource per support rep, one Mastra thread per ticket.
 export const RESOURCE_ID = "rep_001";
 
