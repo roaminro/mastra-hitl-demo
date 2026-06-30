@@ -240,12 +240,12 @@ describe('parallel sub-agent delegation (suspend/resume, deterministic)', () => 
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  // Documents the CURRENT (buggy) behavior on @mastra/core 1.42.0: approving
-  // the first of two parallel approvals tears down the second sub-agent's
-  // suspended run, so only one order is processed and the second approval
-  // fails to resume. When the upstream bug is fixed, flip to the
-  // "CORRECT BEHAVIOR" assertions at the bottom.
-  it('BUG REPRO: resuming the first of two parallel approvals drops the second', async () => {
+  // Regression guard for the parallel-approval fix (landed by @mastra/core
+  // 1.48.0-alpha): approving each of two parallel approvals by toolCallId now
+  // resumes both sub-agent runs independently, so BOTH orders process and
+  // neither resume errors with AGENT_RESUME_NO_SNAPSHOT_FOUND. Previously
+  // (<=1.42.0) the first resume tore down the second's suspended run.
+  it('resuming two parallel approvals processes both orders', async () => {
     processedOrders.length = 0;
     const sub = buildSubAgent();
     const sup = buildSupervisor(sub);
@@ -278,18 +278,8 @@ describe('parallel sub-agent delegation (suspend/resume, deterministic)', () => 
     // eslint-disable-next-line no-console
     console.log('DETERMINISTIC PROCESSED ORDERS:', processedOrders);
 
-    // --- CURRENT BUGGY BEHAVIOR (what 1.42.0 actually does) ---
-    // Only ONE order processes; the second approval fails to resume because
-    // its suspended sub-agent run was torn down by the first resume.
-    expect(processedOrders.length).toBe(1);
-    const errorBlob = resumeErrors.join('\n');
-    expect(
-      errorBlob.includes('AGENT_RESUME_NO_SNAPSHOT_FOUND') ||
-        errorBlob.includes('could not find a suspended run'),
-    ).toBe(true);
-
-    // --- CORRECT BEHAVIOR (enable when the upstream bug is fixed) ---
-    // expect(processedOrders.slice().sort()).toEqual([ORDER_A, ORDER_B].sort());
-    // expect(resumeErrors).toEqual([]);
+    // Both approvals resume cleanly and both distinct orders process.
+    expect(resumeErrors).toEqual([]);
+    expect(processedOrders.slice().sort()).toEqual([ORDER_A, ORDER_B].sort());
   });
 });
