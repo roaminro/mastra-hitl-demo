@@ -6,7 +6,7 @@ A customer-support copilot demonstrating four [Mastra](https://mastra.ai) capabi
 - **Human-in-the-loop approvals** — side-effecting tools (refunds, sending an email) require approval; the chat UI shows an Allow/Deny prompt before anything happens
 - **Observational memory** — the supervisor compacts long threads and remembers customers and past tickets, with a `recall` tool so verbatim detail is never lost
 - **MCP** — the `notifications-agent` reaches its email tools through a Mastra MCP server/client, with approval gated on the client per-tool
-- **Dynamic tool discovery** — a standalone `tools-agent` starts with no tools loaded and finds the right one on demand via Mastra's `ToolSearchProcessor`. Its searchable library mixes local CRM tools with MCP tools, and the approval-gated MCP send tool still suspends when discovered this way — so discovery and HITL compose
+- **Dynamic tool discovery** — Mastra's `ToolSearchProcessor` shows up twice: a standalone `tools-agent` demos it directly (searchable library mixing local CRM tools with MCP tools, where the approval-gated MCP send tool still suspends when discovered — so discovery and HITL compose), and the `account-agent` subagent uses it *inside* the copilot, where delegation keeps all the search churn off the supervisor's stream
 
 The story: an internal support rep chats with the copilot to handle customer tickets. Lookups are free, but refunds and customer emails suspend the run until the rep explicitly approves them in the UI. The sidebar also exposes a separate **tool-search demo** agent.
 
@@ -23,7 +23,7 @@ apps/
 | File | Purpose |
 | --- | --- |
 | `agents/support-agent.ts` | Supervisor. Delegates to subagents; observational memory enabled (3k-token observation threshold, async buffering, temporal markers, **retrieval mode** so compacted detail stays recallable) |
-| `agents/account-agent.ts` | Lists/looks up customers, plans, orders, refund history; pulls full ticket history via `fetch-account-history` |
+| `agents/account-agent.ts` | Lists/looks up customers, plans, orders, refund history; pulls full ticket history via `fetch-account-history`. Owns **no static tools** — a `ToolSearchProcessor` (`autoLoad`, `storage: 'context'`) discovers the right read-only tool per request. Because it's a subagent, its `search_tools` calls stay folded inside the delegation and never surface on the supervisor's stream or history |
 | `agents/billing-agent.ts` | Issues refunds via the approval-gated `issue-refund` tool; runs a nested `risk-agent` risk check first |
 | `agents/risk-agent.ts` | Nested subagent. Read-only fraud/abuse risk assessment for a refund |
 | `agents/notifications-agent.ts` | Subagent that sends customer emails through the notifications MCP server; resolves its MCP tools lazily (per request) |
@@ -52,7 +52,7 @@ Assistant UI ships no Mastra integration and no concept of subagent delegation, 
 | File | What it adds |
 | --- | --- |
 | `lib/mastra-threads.tsx` | A `RemoteThreadListAdapter` (list/create/rename/archive/unarchive/delete threads via `@mastra/client-js`) and a history adapter that converts `MastraMessage → UIMessage`. Tool calls are restored into `output-available` / `approval-requested` states so a refreshed thread keeps its tool calls and any still-pending Allow/Deny. |
-| `components/assistant-ui/subagent-activity.tsx` | A `makeAssistantDataUI` renderer for Mastra's `data-tool-agent` stream part — the live "Delegating to X" card with nested tool calls/results, plus an agent-name fallback for when Mastra's resume-after-approval stream drops `data.id`. |
+| `components/assistant-ui/subagent-activity.tsx` | A `makeAssistantDataUI` renderer for Mastra's `data-tool-agent` stream part — the live "Delegating to X" card with nested tool calls/results, plus an agent-name fallback for when Mastra's resume-after-approval stream drops `data.id`. Hides the `search_tools`/`load_tool` meta-tools inside the card, so a subagent's tool discovery shows only the real tool it activated. |
 
 **Modified stock components**
 
@@ -72,6 +72,10 @@ The sidebar has an **Agent** dropdown that switches which agent answers — the 
 The *Tool search demo* points at `tools-agent`, which has no tools loaded up front. It calls the `search_tools` meta-tool to find a tool by keywords, the match is auto-activated (no `load_tool` step), and it answers on the next turn. Because the processor uses `storage: 'context'`, an already-discovered tool stays loaded for later turns in the same thread — a follow-up lookup skips the search and goes straight to the tool.
 
 The library isn't just local tools: the MCP notification tools are spread into it via `notificationsClient.listTools()`, which returns the same `Record<string, Tool>` shape the processor expects. The key point is that the two mechanisms operate at different layers and compose — `ToolSearchProcessor` controls *discovery*, while the `MCPClient`'s per-tool `requireToolApproval` controls *execution*. So the agent can search for and auto-load `send-customer-email`, but calling it still suspends for approval, while the read-only `list-sent-emails` runs freely. (One nuance of `storage: 'context'`: a loaded tool only stays loaded while its `search_tools` result is in the message window, so a brand-new turn may re-search before sending.)
+
+### Tool search on a subagent (keeping discovery out of the user-facing stream)
+
+Putting a `ToolSearchProcessor` directly on a user-facing agent has a UX cost: its `search_tools` calls stream as ordinary tool-call parts, and the model may even narrate "let me search for a tool…" in its text. This demo also shows the structural fix — put the processor on a **subagent**. The `account-agent` has no static tools; it discovers its read-only CRM tools per request. Because subagent delegation folds all inner activity into a single `data-tool-agent` progress part, the discovery churn never appears as top-level tool calls in the supervisor's stream or persisted history — the rep just sees "Delegating to Account" and the real tool it ended up using (the delegation card filters out the `search_tools`/`load_tool` meta rows). Verified by `subagent-toolsearch-visibility.probe.test.ts`, which asserts the search meta-tools appear zero times at the top level.
 
 ## Setup
 

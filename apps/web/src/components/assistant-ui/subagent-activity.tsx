@@ -79,10 +79,26 @@ const isAgentTool = (toolName?: string): boolean =>
   typeof toolName === "string" && toolName.startsWith("agent-");
 
 /**
+ * Meta-tools injected by a subagent's `ToolSearchProcessor` (the account-agent
+ * uses one for dynamic tool discovery). These are plumbing — the subagent uses
+ * them to FIND its real tools — so they'd be noise as inner rows in the
+ * delegation card. Hide them; the real tool the search activated still shows.
+ */
+const SEARCH_META_TOOLS = new Set(["search_tools", "load_tool"]);
+const isSearchMetaTool = (toolName?: string): boolean =>
+  typeof toolName === "string" && SEARCH_META_TOOLS.has(toolName);
+
+/** Tools that should not render as their own flat row in a delegation card. */
+const isHiddenInnerTool = (toolName?: string): boolean =>
+  isAgentTool(toolName) || isSearchMetaTool(toolName);
+
+/**
  * Collect the subagent's OWN tool calls/results from the live top-level arrays
  * AND the finalized `steps[]`, so the tool activity stays visible after
  * completion. Nested `agent-*` delegations are excluded here — they render as
- * nested cards via `collectNestedAgents` instead of flat tool rows.
+ * nested cards via `collectNestedAgents` instead of flat tool rows. Tool-search
+ * meta-tools (`search_tools`/`load_tool`) are excluded too — see
+ * `isSearchMetaTool`.
  */
 const collectTools = (data: SubagentData) => {
   const calls = new Map<string, SubagentToolCall>();
@@ -93,9 +109,9 @@ const collectTools = (data: SubagentData) => {
     rs: SubagentToolResult[] = [],
   ) => {
     for (const c of cs)
-      if (c?.toolCallId && !isAgentTool(c.toolName)) calls.set(c.toolCallId, c);
+      if (c?.toolCallId && !isHiddenInnerTool(c.toolName)) calls.set(c.toolCallId, c);
     for (const r of rs)
-      if (r?.toolCallId && !isAgentTool(r.toolName)) results.set(r.toolCallId, r);
+      if (r?.toolCallId && !isHiddenInnerTool(r.toolName)) results.set(r.toolCallId, r);
   };
 
   ingest(data.toolCalls, data.toolResults);
