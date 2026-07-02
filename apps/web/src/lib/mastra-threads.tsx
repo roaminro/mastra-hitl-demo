@@ -16,6 +16,7 @@ export const MASTRA_URL =
 export const AGENTS = [
   { id: "support-agent", label: "Support copilot" },
   { id: "tools-agent", label: "Tool search demo" },
+  { id: "routing-agent", label: "Model routing demo" },
 ] as const;
 
 export const DEFAULT_AGENT_ID = AGENTS[0].id;

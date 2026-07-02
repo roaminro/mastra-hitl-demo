@@ -12,6 +12,7 @@ import { Thread } from "@/components/assistant-ui/thread";
 import { ThreadList } from "@/components/assistant-ui/thread-list";
 import { SubagentActivityUI } from "@/components/assistant-ui/subagent-activity";
 import { OmActivityUI } from "@/components/assistant-ui/om-activity";
+import { ModelRoutingUI } from "@/components/assistant-ui/model-routing";
 import {
   AGENTS,
   DEFAULT_AGENT_ID,
@@ -92,6 +93,8 @@ export const Assistant = () => {
       <SubagentActivityUI />
       {/* Registers renderers for Mastra's `data-om-*` (Observational Memory) parts. */}
       <OmActivityUI />
+      {/* Registers the renderer for the routing-agent's `data-model-routing` parts. */}
+      <ModelRoutingUI />
       <div className="flex h-dvh overflow-hidden">
         <aside className="border-border bg-muted/30 flex w-[260px] shrink-0 flex-col gap-2 overflow-y-auto border-r p-3">
           <div className="flex flex-col gap-1 px-2 pt-1">
