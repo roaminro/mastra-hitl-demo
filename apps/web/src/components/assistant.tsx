@@ -13,6 +13,7 @@ import { ThreadList } from "@/components/assistant-ui/thread-list";
 import { SubagentActivityUI } from "@/components/assistant-ui/subagent-activity";
 import { OmActivityUI } from "@/components/assistant-ui/om-activity";
 import { ModelRoutingUI } from "@/components/assistant-ui/model-routing";
+import { CodeModeToolFallback } from "@/components/assistant-ui/code-mode";
 import {
   AGENTS,
   DEFAULT_AGENT_ID,
@@ -123,7 +124,9 @@ export const Assistant = () => {
           <ThreadList />
         </aside>
         <main className="h-full min-w-0 flex-1">
-          <Thread />
+          {/* ToolFallback override renders the codemode-agent's
+              `execute_typescript` calls as code + aggregated result. */}
+          <Thread components={{ ToolFallback: CodeModeToolFallback }} />
         </main>
       </div>
     </AssistantRuntimeProvider>

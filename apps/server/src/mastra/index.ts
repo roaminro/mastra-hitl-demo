@@ -13,6 +13,7 @@ import { supportAgent } from './agents/support-agent';
 import { notificationsAgent } from './agents/notifications-agent';
 import { toolsAgent } from './agents/tools-agent';
 import { routingAgent } from './agents/routing-agent';
+import { codemodeAgent } from './agents/codemode-agent';
 import { notificationsServer } from './mcp/notifications-server';
 
 export const mastra = new Mastra({
@@ -24,6 +25,7 @@ export const mastra = new Mastra({
     notificationsAgent,
     toolsAgent,
     routingAgent,
+    codemodeAgent,
   },
   mcpServers: {
     notificationsServer,

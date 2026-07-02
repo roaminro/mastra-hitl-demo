@@ -8,8 +8,9 @@ A customer-support copilot demonstrating four [Mastra](https://mastra.ai) capabi
 - **MCP** — the `notifications-agent` reaches its email tools through a Mastra MCP server/client, with approval gated on the client per-tool
 - **Dynamic tool discovery** — Mastra's `ToolSearchProcessor` shows up twice: a standalone `tools-agent` demos it directly (searchable library mixing local CRM tools with MCP tools, where the approval-gated MCP send tool still suspends when discovered — so discovery and HITL compose), and the `account-agent` subagent uses it *inside* the copilot, where delegation keeps all the search churn off the supervisor's stream
 - **Dynamic model routing** — a standalone `routing-agent` demos a custom input processor that classifies each request with a nano-class model and overrides the run's model via `processInputStep()`: simple requests go to a cheap model, reasoning/coding to a strong one, and the decision is streamed to the UI so routing is never invisible
+- **Code mode** — a standalone `codemode-agent` demos `createCodeMode()`: its analytics tools return large raw lists (500 transactions, no aggregation option), and instead of dumping them into context the model writes one sandboxed TypeScript function that calls the tools as `external_*` functions, joins/filters/reduces the lists in code, and returns one small structured result — correct arithmetic included
 
-The story: an internal support rep chats with the copilot to handle customer tickets. Lookups are free, but refunds and customer emails suspend the run until the rep explicitly approves them in the UI. The sidebar also exposes two separate demo agents: **tool-search demo** and **model routing demo**.
+The story: an internal support rep chats with the copilot to handle customer tickets. Lookups are free, but refunds and customer emails suspend the run until the rep explicitly approves them in the UI. The sidebar also exposes three separate demo agents: **tool-search demo**, **model routing demo**, and **code mode demo**.
 
 ## Structure
 
@@ -30,6 +31,9 @@ apps/
 | `agents/notifications-agent.ts` | Subagent that sends customer emails through the notifications MCP server; resolves its MCP tools lazily (per request) |
 | `agents/routing-agent.ts` | Standalone demo of dynamic model routing. Its static `model` is only a fallback — the `ModelRoutingProcessor` overrides the model per request (cheap tier `gpt-5.4-mini`, strong tier `gpt-5.4`) |
 | `processors/model-routing-processor.ts` | Custom `Processor` implementing `processInputStep()`. A `gpt-5.4-nano` classifier labels the latest user message (`chat`/`lookup`/`writing`/`reasoning`/`code`, structured output, temp 0, input truncated to 2k chars); `reasoning`/`code` route to the strong model, everything else to the cheap one. Routes once at step 0 and pins the decision in `state` so tool-call continuations don't flip models; any classifier failure **fails open** to the strong model; the decision streams to the client as a `data-model-routing` chunk |
+| `agents/codemode-agent.ts` | Standalone demo of Mastra **code mode** (`createCodeMode()`, beta). Exposes only the generated `execute_typescript` tool plus its generated instructions (typed `external_*` declarations); the analytics tools are reachable only from inside the sandboxed function. Uses `LocalSandbox` — fine locally, use an isolated sandbox in production |
+| `tools/analytics-tools.ts` | Mock analytics tools that intentionally return **large raw lists** with no aggregation: `list-transactions` (500 rows), `list-accounts` (40 rows), `get-account-transactions` (per-account fan-out) |
+| `tools/analytics-data.ts` | Deterministic mock dataset (seeded PRNG) — identical on every run, so tests can compute expected aggregates and assert the sandbox math to the cent |
 | `agents/tools-agent.ts` | Standalone demo of `ToolSearchProcessor`. Starts with `tools: {}` and an input processor holding a searchable library of local CRM tools **plus the MCP notification tools** (resolved via `notificationsClient.listTools()`) behind `search_tools`; `storage: 'context'` (restart-safe loaded-tool state) and `search.autoLoad: true` (matched tools activate immediately, no `load_tool` step). The processor is built lazily per request (cached) because the MCP fetch connects to a server that may not be up at module load |
 | `mcp/notifications-server.ts` | A Mastra `MCPServer` exposing `send-customer-email` (side-effecting) and `list-sent-emails` (read-only). Registered on the Mastra instance, so it's served at `/api/mcp/notifications-server/mcp` |
 | `mcp/notifications-client.ts` | A Mastra `MCPClient` connecting to that server with a per-tool `requireToolApproval` predicate — sends need approval, reads don't |
@@ -57,6 +61,7 @@ Assistant UI ships no Mastra integration and no concept of subagent delegation, 
 | `lib/mastra-threads.tsx` | A `RemoteThreadListAdapter` (list/create/rename/archive/unarchive/delete threads via `@mastra/client-js`) and a history adapter that converts `MastraMessage → UIMessage`. Tool calls are restored into `output-available` / `approval-requested` states so a refreshed thread keeps its tool calls and any still-pending Allow/Deny. |
 | `components/assistant-ui/subagent-activity.tsx` | A `makeAssistantDataUI` renderer for Mastra's `data-tool-agent` stream part — the live "Delegating to X" card with nested tool calls/results, plus an agent-name fallback for when Mastra's resume-after-approval stream drops `data.id`. Hides the `search_tools`/`load_tool` meta-tools inside the card, so a subagent's tool discovery shows only the real tool it activated. |
 | `components/assistant-ui/model-routing.tsx` | A `makeAssistantDataUI` renderer for the `data-model-routing` chunk — a collapsible "Routed to `<model>`" card with a CHEAP/STRONG badge, the classifier label and latency, and the classifier's reasoning inside (fail-open decisions get a shield icon). |
+| `components/assistant-ui/code-mode.tsx` | A `ToolFallback` override (passed via `<Thread components={{ ToolFallback }} />`) that renders the codemode-agent's `execute_typescript` calls as a "Ran sandboxed TypeScript" card — the model-generated code as a code block, the aggregated result, and any sandbox logs — and delegates every other tool to the stock fallback. |
 
 **Modified stock components**
 
@@ -67,11 +72,11 @@ Assistant UI ships no Mastra integration and no concept of subagent delegation, 
 | `thread-list.tsx` | Adds an "Archived" section with unarchive-on-hover (the generated version is a flat list). |
 | `tooltip-icon-button.tsx` | One-line shadcn Base UI compat fix (`delayDuration` → `delay`). |
 
-**Runtime wiring** (`components/assistant.tsx`): `useChatRuntime` + `AssistantChatTransport` pointed at the custom `/chat/:agentId` route, `sendAutomaticallyWhen: allApprovalsResponded` (an approval auto-resumes the run), a fresh `threadId` per page load, and mounting `SubagentActivityUI` and `ModelRoutingUI`.
+**Runtime wiring** (`components/assistant.tsx`): `useChatRuntime` + `AssistantChatTransport` pointed at the custom `/chat/:agentId` route, `sendAutomaticallyWhen: allApprovalsResponded` (an approval auto-resumes the run), a fresh `threadId` per page load, mounting `SubagentActivityUI` and `ModelRoutingUI`, and passing the `CodeModeToolFallback` override to `<Thread />`.
 
 ### Agent selector + tool-search demo
 
-The sidebar has an **Agent** dropdown that switches which agent answers — the *Support copilot*, the *Tool search demo*, or the *Model routing demo*. Selecting an agent rebuilds the `AssistantChatTransport` so its `/chat/:agentId` URL follows the choice; everything else is unchanged. The thread list, titles, and history are **shared** across agents because Mastra scopes memory threads by `resourceId` (`rep_001`), not by agent — so switching agents keeps the same ticket list, and a conversation can contain turns from any of the agents.
+The sidebar has an **Agent** dropdown that switches which agent answers — the *Support copilot*, the *Tool search demo*, the *Model routing demo*, or the *Code mode demo*. Selecting an agent rebuilds the `AssistantChatTransport` so its `/chat/:agentId` URL follows the choice; everything else is unchanged. The thread list, titles, and history are **shared** across agents because Mastra scopes memory threads by `resourceId` (`rep_001`), not by agent — so switching agents keeps the same ticket list, and a conversation can contain turns from any of the agents.
 
 The *Tool search demo* points at `tools-agent`, which has no tools loaded up front. It calls the `search_tools` meta-tool to find a tool by keywords, the match is auto-activated (no `load_tool` step), and it answers on the next turn. Because the processor uses `storage: 'context'`, an already-discovered tool stays loaded for later turns in the same thread — a follow-up lookup skips the search and goes straight to the tool.
 
@@ -88,7 +93,7 @@ pnpm install
 cp apps/server/.env.example apps/server/.env   # add your OPENROUTER_API_KEY
 ```
 
-Models are routed through OpenRouter (`openai/gpt-5.4-mini` for agents, `google/gemini-2.5-flash` for the memory observer; the routing demo additionally uses `openai/gpt-5.4-nano` as its classifier and `openai/gpt-5.4` as its strong tier).
+Models are routed through OpenRouter (`openai/gpt-5.4-mini` for agents, `google/gemini-2.5-flash` for the memory observer; the routing demo additionally uses `openai/gpt-5.4-nano` as its classifier and `openai/gpt-5.4` as its strong tier, and the code mode demo uses `openai/gpt-5.4`).
 
 ## Run
 
@@ -144,6 +149,14 @@ The mock CRM has two customers: **Dana Reyes** (`cust_001`, `dana@example.com`) 
 
 Each response gets a **"Routed to …"** card above it — expand it to see the classifier's one-line reasoning and latency.
 
+**Code mode** (switch the sidebar **Agent** dropdown to *Code mode demo* first)
+
+- `which region generated the most paid revenue in March 2026, and what was the average paid transaction size per plan?` — one `execute_typescript` call fetches 500 transactions + 40 accounts in parallel, joins them, and returns just the grouped totals
+- `across all of 2026, which account generated the most paid revenue?` — a join + group-by + sort, all in code
+- `what share of each month's transactions were refunded?` — per-month rates computed as JavaScript, not token math
+
+Each answer gets a **"Ran sandboxed TypeScript"** card — expand it to see the exact code the model wrote, the compact aggregated result it returned, and any logs.
+
 Threads persist in Mastra memory: refresh the page and the sidebar list, titles, and full history (including past approvals) are restored. Archived threads appear in an "Archived" section and can be unarchived.
 
 ### How Observational Memory compaction works
@@ -165,6 +178,19 @@ The *Model routing demo* agent (`routing-agent`) shows how to pick a model per r
 5. The decision is streamed to the client as a `data-model-routing` chunk (and logged server-side), which `model-routing.tsx` renders as the "Routed to …" card — routing is always visible, never a silent downgrade.
 
 The classifier adds ~1s of latency per request; in production you'd swap it for a fine-tuned classifier or embedding router (<5ms) once you have labeled traffic. Verified by `model-routing.live.test.ts`, which asserts a trivial greeting routes cheap and a multi-step coding request routes strong against the live API.
+
+## How code mode works
+
+The *Code mode demo* agent (`codemode-agent`) shows Mastra's answer to the "many tool round-trips, huge tool payloads" problem. Without code mode, a query like "top region by paid revenue in March" would force the agent to pull 500 raw transactions plus 40 accounts into its context window and do the join and arithmetic by token prediction — slow, expensive, and error-prone.
+
+With `createCodeMode()`:
+
+1. The factory takes the analytics tools and returns a single generated tool (`execute_typescript`) plus generated instructions containing one typed `declare function external_<id>(...)` line per tool (ids are sanitized: `list-transactions` → `external_list_transactions`).
+2. Per query, the model writes one TypeScript function that calls those `external_*` functions — typically fetching in parallel with `Promise.all` — and joins/filters/reduces the results in code.
+3. The function runs in a workspace sandbox (`LocalSandbox` here, i.e. a host `node` process — deliberate for a local demo since the code is model-authored). Each `external_*` call is bridged back to the **real tool on the host**, with schema validation and tracing intact.
+4. The agent receives only the function's return value — a compact aggregate instead of hundreds of raw rows — plus captured `console` logs.
+
+The analytics dataset is generated with a seeded PRNG, so it's identical on every run. `codemode.live.test.ts` exploits that: it computes the expected aggregates in plain TypeScript and asserts the live agent's answer matches **to the exact cent**, that the generated code actually calls the `external_*` bridges, and that the tool result returned to the agent is >5× smaller than the raw list payload.
 
 ## How the approval flow works
 
