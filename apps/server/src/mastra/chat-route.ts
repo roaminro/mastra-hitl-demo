@@ -34,45 +34,84 @@ export const chatRoute = registerApiRoute('/chat/:agentId', {
     const body = (await c.req.json()) as ChatBody;
 
     const lastMessage = body.messages?.at(-1);
-    const approvalPart =
-      lastMessage?.role === 'assistant'
-        ? lastMessage.parts.find(
-            (part): part is typeof part & {
-              toolCallId: string;
-              approval: { id: string };
-            } =>
-              'state' in part &&
-              part.state === 'approval-responded' &&
-              'approval' in part,
-          )
+    type ApprovalPart = {
+      toolCallId: string;
+      approval: { id: string };
+      state: 'approval-responded';
+    };
+    const asApprovalPart = (part: unknown): ApprovalPart | undefined =>
+      typeof part === 'object' &&
+      part !== null &&
+      'state' in part &&
+      (part as { state: string }).state === 'approval-responded' &&
+      'approval' in part &&
+      'toolCallId' in part
+        ? (part as ApprovalPart)
         : undefined;
 
-    if (approvalPart) {
+    // Multiple approval-responded parts can be present at once (parallel tool
+    // approvals, or a stale approval left over from a previous auto-send).
+    // Rewrite every one that still matches a suspended tool call; skip the
+    // rest so a stale approval-responded part can't re-trigger an already
+    // resumed run.
+    const approvalParts: ApprovalPart[] =
+      lastMessage?.role === 'assistant'
+        ? lastMessage.parts.flatMap((part) => {
+            const approval = asApprovalPart(part);
+            return approval ? [approval] : [];
+          })
+        : [];
+
+    if (approvalParts.length > 0) {
       const thread = body.memory?.thread;
       const threadId = typeof thread === 'string' ? thread : thread?.id;
       const resourceId = body.memory?.resource;
       const agent = mastra.getAgentById(agentId);
 
-      let runId: string | undefined;
-      if (threadId && resourceId) {
-        // Fast path: a run still suspended in this process.
-        runId = agent.getActiveThreadRunId({ threadId, resourceId });
-        // Durable path (survives refresh/restart, multi-instance): storage-backed
-        // discovery, matched to this approval's toolCallId.
-        if (!runId) {
-          const { runs } = await agent.listSuspendedRuns({ threadId, resourceId });
-          runId = runs.find((run) =>
-            run.toolCalls.some((tc) => tc.toolCallId === approvalPart.toolCallId),
-          )?.runId;
+      if (!threadId || !resourceId) {
+        return c.json({ error: 'Missing thread or resource for approval resume.' }, 400);
+      }
+
+      // Fast path: a run still suspended in this process. Storage-backed
+      // fallback survives refresh/restart and multi-instance deployments.
+      const activeRunId = agent.getActiveThreadRunId({ threadId, resourceId });
+      const { runs: suspendedRuns } = await agent.listSuspendedRuns({
+        threadId,
+        resourceId,
+      });
+
+      // Build a map from toolCallId → runId across every currently-suspended
+      // run. Tool-call IDs are unique per run, so this disambiguates parallel
+      // approvals cleanly.
+      const runIdByToolCallId = new Map<string, string>();
+      for (const run of suspendedRuns) {
+        for (const tc of run.toolCalls) {
+          if (tc.toolCallId) runIdByToolCallId.set(tc.toolCallId, run.runId);
         }
       }
-      if (!runId) {
+
+      let matched = 0;
+      for (const part of approvalParts) {
+        const runId =
+          runIdByToolCallId.get(part.toolCallId) ??
+          // Fall back to the in-process active run when storage hasn't caught
+          // up yet (e.g. the run suspended in this process a moment ago).
+          activeRunId;
+        if (!runId) {
+          // Stale part: its run already resumed. Leave it alone; the agent
+          // loop will ignore it because the toolCallId is no longer pending.
+          continue;
+        }
+        part.approval.id = `${runId}::${part.toolCallId}`;
+        matched++;
+      }
+
+      if (matched === 0) {
         return c.json(
-          { error: 'No suspended run found for this thread. The run may have already completed.' },
+          { error: 'No suspended run found for these approvals. The run may have already completed.' },
           409,
         );
       }
-      approvalPart.approval.id = `${runId}::${approvalPart.toolCallId}`;
     }
 
     const stream = await handleChatStream({

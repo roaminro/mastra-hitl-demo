@@ -54,7 +54,11 @@ const buildTransport = (agentId: string) =>
       body: {
         ...options.body,
         id: options.id,
-        messages: options.messages,
+        // The server owns history via Mastra memory (thread/resource below), so
+        // only send the latest message. Sending the full transcript re-persists
+        // old rows with fresh part-level `createdAt` timestamps, which corrupts
+        // memory-recall ordering (past user turns land after their replies).
+        messages: options.messages.slice(-1),
         trigger: options.trigger,
         messageId: options.messageId,
         metadata: options.requestMetadata,

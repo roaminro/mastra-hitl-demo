@@ -53,7 +53,25 @@ never claim a detail is unavailable before checking recall.`,
   model: 'openrouter/openai/gpt-5.4-mini',
   agents: { accountAgent, billingAgent, notificationsAgent },
   defaultOptions: {
-    maxSteps: 20
+    maxSteps: 20,
+    // Filter what the subagent sees as prior context. Otherwise the parent's
+    // final user turn ("send a test email to dana") appears as a `user` message
+    // in the subagent's transcript alongside the delegation prompt
+    // ("Send a test email to dana@example.com. Subject: ..."), producing two
+    // back-to-back user messages that make the subagent's LLM think the
+    // request was never fulfilled — it re-calls the tool on the next step.
+    //
+    // Strip trailing user messages so the subagent sees only the delegation
+    // prompt (which itself is a `user` message injected by the framework).
+    delegation: {
+      messageFilter: ({ messages }) => {
+        const trimmed = [...messages];
+        while (trimmed.length && trimmed[trimmed.length - 1]?.role === 'user') {
+          trimmed.pop();
+        }
+        return trimmed;
+      },
+    },
   },
   memory: new Memory({
     options: {
@@ -70,7 +88,9 @@ never claim a detail is unavailable before checking recall.`,
         // the summary dropped it. This means a large tool result (e.g. a full
         // account history) can trigger compaction WITHOUT permanently losing
         // the verbatim IDs and amounts a support rep depends on.
-        retrieval: true,
+        retrieval: {
+          scope: 'thread'
+        },
         observation: {
           // Low threshold so the Observer visibly kicks in during a demo
           // (default is 30k tokens). One `fetch-account-history` pull is
