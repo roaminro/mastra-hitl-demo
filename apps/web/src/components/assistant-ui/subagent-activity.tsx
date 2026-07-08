@@ -2,7 +2,7 @@
 
 import { memo, useState, type ReactNode } from "react";
 import { CheckIcon, ChevronDownIcon, LoaderIcon, WrenchIcon } from "lucide-react";
-import { makeAssistantDataUI } from "@assistant-ui/react";
+import { makeAssistantDataUI, useAuiState } from "@assistant-ui/react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -142,6 +142,32 @@ type ToolPart = {
   result?: unknown;
 };
 
+/**
+ * Tool results that ride inside `response.messages` now use the AI SDK v6
+ * tool-output envelope (`{ type: "json" | "text" | ..., value: ... }`).
+ * Rendering the envelope verbatim shows raw `{"type":"json","value":{...}}`
+ * JSON in the card, so peel it off; plain (legacy) values pass through.
+ */
+const unwrapToolOutput = (value: unknown): unknown => {
+  if (
+    value &&
+    typeof value === "object" &&
+    "type" in value &&
+    "value" in value
+  ) {
+    const { type, value: inner } = value as { type: unknown; value: unknown };
+    if (
+      type === "json" ||
+      type === "text" ||
+      type === "error-json" ||
+      type === "error-text"
+    ) {
+      return inner;
+    }
+  }
+  return value;
+};
+
 /** Walk a subagent's buffer and return every nested `agent-*` delegation. */
 const collectNestedAgents = (data: SubagentData): SubagentData[] => {
   const calls = new Map<string, ToolPart>();
@@ -169,7 +195,7 @@ const collectNestedAgents = (data: SubagentData): SubagentData[] => {
   return [...ids].map((id) => {
     const call = calls.get(id);
     const result = results.get(id);
-    const output = result?.output ?? result?.result;
+    const output = unwrapToolOutput(result?.output ?? result?.result);
     const promptInput = (call?.input ?? call?.args ?? {}) as { prompt?: string };
     const outText =
       typeof output === "string"
@@ -261,17 +287,28 @@ const humanizeAgentName = (id: string) =>
  * from a uniquely-owned tool when possible, else fall back to "Subagent" so
  * the card is never nameless.
  */
-const toolToAgent: Record<string, string> = {
-  issueRefundTool: "billing-agent",
-  listCustomersTool: "account-agent",
-  lookupCustomerTool: "account-agent",
-};
+/**
+ * Ordered by specificity: uniquely-owned tools first. `lookupCustomerTool` is
+ * shared between the account and notifications agents, so it can only be a
+ * last resort — checking it early mislabeled a resumed Notifications
+ * delegation as "Account".
+ */
+const toolToAgent: [matches: (toolName: string) => boolean, agent: string][] = [
+  [(t) => t.startsWith("notifications_"), "notifications-agent"],
+  [(t) => t === "issueRefundTool", "billing-agent"],
+  [(t) => t === "listCustomersTool", "account-agent"],
+  [(t) => t === "fetchAccountHistoryTool", "account-agent"],
+  // Shared tools are the weakest signals, checked last: riskCheckTool is
+  // owned by risk + account, lookupCustomerTool by account + notifications.
+  [(t) => t === "riskCheckTool", "risk-agent"],
+  [(t) => t === "lookupCustomerTool", "account-agent"],
+];
 
 const resolveAgentName = (data: SubagentData): string => {
   if (data.id) return humanizeAgentName(data.id);
-  for (const tn of allToolNames(data)) {
-    const agent = toolToAgent[tn];
-    if (agent) return humanizeAgentName(agent);
+  const names = allToolNames(data);
+  for (const [matches, agent] of toolToAgent) {
+    if (names.some(matches)) return humanizeAgentName(agent);
   }
   return "Subagent";
 };
@@ -307,9 +344,12 @@ const SubagentToolRow = ({
           )}
           {done && result?.result !== undefined && (
             <pre className="bg-muted/50 text-muted-foreground rounded-md p-2 text-[11px] whitespace-pre-wrap">
-              {typeof result.result === "string"
-                ? result.result
-                : JSON.stringify(result.result, null, 2)}
+              {(() => {
+                const value = unwrapToolOutput(result.result);
+                return typeof value === "string"
+                  ? value
+                  : JSON.stringify(value, null, 2);
+              })()}
             </pre>
           )}
         </div>
@@ -419,9 +459,30 @@ export const SubagentCard = ({
   );
 };
 
-const SubagentActivity = memo(({ data }: { data: SubagentData }) => (
-  <SubagentCard data={data} depth={0} />
-));
+const SubagentActivity = memo(({ data }: { data: SubagentData }) => {
+  // Live progress is this part's only job. Once the delegation is over, the
+  // `agent-*` tool-call part in the same message carries the full delegation
+  // summary (`text` + `subAgentToolResults`) and renders it via
+  // `AgentDelegationSummary` — the same card used when history is restored
+  // after a refresh. Rendering this data part too would show the delegation
+  // twice. Worse, on the approve-and-resume leg the buffered state is rebuilt
+  // from scratch with an empty agent `id` and no pre-suspend tool calls, so
+  // the duplicate also has a wrong (inferred) name and missing rows.
+  //
+  // "Over" is detected two ways because the buffer isn't always reliable:
+  // 1. the buffered status flipped to "finished", or
+  // 2. the whole assistant message stopped generating ("running" ends;
+  //    "requires-action" still counts as live so the card keeps framing a
+  //    pending approval). A delegation whose stream errors mid-run never gets
+  //    a "finished" chunk and would otherwise spin forever.
+  const messageIsLive = useAuiState(
+    (s) =>
+      s.message.status?.type === "running" ||
+      s.message.status?.type === "requires-action",
+  );
+  if (data.status === "finished" || !messageIsLive) return null;
+  return <SubagentCard data={data} depth={0} />;
+});
 
 /**
  * Registers a renderer for the `data-tool-agent` parts that Mastra streams

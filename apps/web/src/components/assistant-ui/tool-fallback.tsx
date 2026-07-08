@@ -526,12 +526,14 @@ const AgentDelegationToolPart: ToolCallMessagePartComponent = ({
   // Running live: the SubagentActivity data-part renders the rich card.
   if (status?.type === "running") return null;
 
-  // Finished / restored from history: the live `data-tool-agent` part no longer
-  // exists, so reshape the persisted delegation output into the same
-  // `SubagentData` the live renderer uses and render the SAME recursive
-  // `SubagentCard`. This keeps recalled history visually identical to live —
-  // including nested (multi-level) delegations and the subagent's tool rows.
-  // Without this, a delegation would disappear entirely after a page refresh.
+  // Finished (live or restored from history): this part owns the display.
+  // The live `data-tool-agent` part hides itself once its status flips to
+  // "finished" (see `SubagentActivity`) because the delegation output here is
+  // the complete, reliable record — the resume-after-approval leg rebuilds
+  // the data part's buffer with an empty agent id and missing pre-suspend
+  // tool calls. Reshape the output into the same `SubagentData` the live
+  // renderer uses and render the SAME recursive `SubagentCard`, so finished
+  // and recalled delegations look identical to live ones.
   return <AgentDelegationSummary toolName={toolName} result={result} />;
 };
 
