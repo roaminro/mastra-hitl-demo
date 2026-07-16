@@ -1,0 +1,25 @@
+{
+  "name": "fulfillment-a2a",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "mastra dev",
+    "build": "mastra build",
+    "start": "mastra start",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "@mastra/core": "1.52.0-alpha.3",
+    "@mastra/loggers": "1.2.0-alpha.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "mastra": "1.19.1-alpha.3",
+    "typescript": "^6.0.3"
+  }
+}

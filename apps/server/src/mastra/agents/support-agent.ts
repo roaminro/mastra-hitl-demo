@@ -3,6 +3,7 @@ import { Memory } from '@mastra/memory';
 import { accountAgent } from './account-agent';
 import { billingAgent } from './billing-agent';
 import { notificationsAgent } from './notifications-agent';
+import { fulfillmentA2AAgent } from './fulfillment-a2a-agent';
 
 export const supportAgent = new Agent({
   id: 'support-agent',
@@ -26,6 +27,12 @@ Use your team for the actual work:
 - Delegate to the notifications-agent to email a customer (for example,
   a refund confirmation or a follow-up). Give it the customer ID (or
   email), a subject, and a body.
+- Delegate shipment tracking, delivery-delay questions, and carrier
+  investigations to the Fulfillment Partner. It is an external agent reached
+  over A2A and owns the authoritative carrier data. First use the account-agent
+  when you need to identify the customer's order ID, then give that order ID to
+  the Fulfillment Partner. Only ask it to open an investigation when the rep
+  explicitly requests one.
 - Refunds move real money and customer emails are a real side effect, so
   the system shows the rep an Allow/Deny prompt before a refund executes
   or an email is sent. Delegating to the billing-agent or the
@@ -51,7 +58,12 @@ of you, use the recall tool to retrieve the source rather than answering
 from your summary. Never paraphrase a value the rep asked for exactly, and
 never claim a detail is unavailable before checking recall.`,
   model: 'openrouter/openai/gpt-5.4-mini',
-  agents: { accountAgent, billingAgent, notificationsAgent },
+  agents: {
+    accountAgent,
+    billingAgent,
+    notificationsAgent,
+    fulfillmentA2AAgent,
+  },
   defaultOptions: {
     maxSteps: 20,
     // Filter what the subagent sees as prior context. Otherwise the parent's

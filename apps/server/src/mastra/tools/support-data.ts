@@ -27,6 +27,7 @@ export const customers: Customer[] = [
     orders: [
       { orderId: 'ord_1001', date: '2026-05-28', item: 'Pro plan (annual)', amountUsd: 240, status: 'delivered' },
       { orderId: 'ord_1002', date: '2026-06-02', item: 'Extra seat add-on', amountUsd: 60, status: 'delivered' },
+      { orderId: 'ord_1003', date: '2026-07-11', item: 'Welcome kit', amountUsd: 45, status: 'shipped' },
     ],
   },
   {

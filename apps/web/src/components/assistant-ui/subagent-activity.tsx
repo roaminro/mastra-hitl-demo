@@ -1,7 +1,13 @@
 "use client";
 
 import { memo, useState, type ReactNode } from "react";
-import { CheckIcon, ChevronDownIcon, LoaderIcon, WrenchIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  LoaderIcon,
+  NetworkIcon,
+  WrenchIcon,
+} from "lucide-react";
 import { makeAssistantDataUI, useAuiState } from "@assistant-ui/react";
 import {
   Collapsible,
@@ -304,7 +310,11 @@ const toolToAgent: [matches: (toolName: string) => boolean, agent: string][] = [
   [(t) => t === "lookupCustomerTool", "account-agent"],
 ];
 
+const isFulfillmentA2AAgent = (data: SubagentData): boolean =>
+  data.id.toLowerCase().includes("fulfillment");
+
 const resolveAgentName = (data: SubagentData): string => {
+  if (isFulfillmentA2AAgent(data)) return "Fulfillment Partner";
   if (data.id) return humanizeAgentName(data.id);
   const names = allToolNames(data);
   for (const [matches, agent] of toolToAgent) {
@@ -384,6 +394,7 @@ export const SubagentCard = ({
   const [open, setOpen] = useState(true);
 
   const name = resolveAgentName(data);
+  const isA2A = isFulfillmentA2AAgent(data);
   const { calls: toolCalls, results: resultsByCallId } = collectTools(data);
   const nestedAgents =
     depth < MAX_DEPTH ? collectNestedAgents(data) : [];
@@ -400,16 +411,24 @@ export const SubagentCard = ({
         ) : (
           <CheckIcon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-500" />
         )}
-        <span className="relative text-start leading-none">
-          <span>
-            {running ? "Delegating to" : "Delegated to"} <b>{name}</b>
+        <span className="flex min-w-0 items-center gap-2 text-start leading-none">
+          <span className="relative inline-block">
+            <span>
+              {running ? "Delegating to" : "Delegated to"} <b>{name}</b>
+            </span>
+            {running && (
+              <span
+                aria-hidden
+                className="shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none"
+              >
+                Delegating to <b>{name}</b>
+              </span>
+            )}
           </span>
-          {running && (
-            <span
-              aria-hidden
-              className="shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none"
-            >
-              Delegating to <b>{name}</b>
+          {isA2A && (
+            <span className="border-sky-500/30 bg-sky-500/10 text-sky-700 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-wide dark:text-sky-300">
+              <NetworkIcon className="size-2.5" />
+              A2A
             </span>
           )}
         </span>
@@ -417,6 +436,15 @@ export const SubagentCard = ({
       </CollapsibleTrigger>
       <CollapsibleContent className="overflow-hidden">
         <div className="flex flex-col gap-1.5 px-3 pb-2.5">
+          {isA2A && (
+            <div className="border-sky-500/20 bg-sky-500/5 text-muted-foreground flex items-center gap-2 rounded-md border px-2 py-1.5 font-mono text-[10px]">
+              <span className="text-sky-700 font-semibold dark:text-sky-300">
+                External agent
+              </span>
+              <span aria-hidden>·</span>
+              <span>{running ? "streaming over A2A" : "remote task complete"}</span>
+            </div>
+          )}
           {prompt && (
             <div className="text-muted-foreground/80 text-xs italic">
               “{prompt}”

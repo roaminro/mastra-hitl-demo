@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { MockLanguageModelV3 } from 'ai/test';
 import { Memory } from '@mastra/memory';
 import { LibSQLStore } from '@mastra/libsql';
+import { Mastra } from '@mastra/core';
 
 /**
  * DETERMINISTIC reproduction of the parallel sub-agent delegation
@@ -177,16 +178,17 @@ function buildSupervisor(subAgent: Agent) {
     },
   });
 
-  return new Agent({
+  const storage = new LibSQLStore({ id: 'approval-test-mem', url: ':memory:' });
+  const supervisor = new Agent({
     id: 'supervisor',
     name: 'Supervisor',
     instructions: 'Delegate each order to the sub agent.',
     model,
     agents: { subAgent },
-    memory: new Memory({
-      storage: new LibSQLStore({ id: 'approval-test-mem', url: ':memory:' }),
-    }),
+    memory: new Memory({ storage }),
   });
+  const mastra = new Mastra({ agents: { supervisor }, storage, logger: false });
+  return mastra.getAgent('supervisor');
 }
 
 interface ApprovalSeen {
