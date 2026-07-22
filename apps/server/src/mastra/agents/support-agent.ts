@@ -87,6 +87,11 @@ never claim a detail is unavailable before checking recall.`,
   },
   memory: new Memory({
     options: {
+      // NOTE: the token thresholds below (observation.messageTokens,
+      // reflection.observationTokens) are deliberately tiny FOR DEMO PURPOSES
+      // so compaction and reflection visibly trigger within a short session.
+      // Production defaults are 30k message tokens / 40k observation tokens —
+      // remove these overrides (or raise them) for real workloads.
       observationalMemory: {
         model: 'openrouter/google/gemini-2.5-flash',
         // Cross-conversation memory: observations are shared across all
@@ -121,6 +126,13 @@ never claim a detail is unavailable before checking recall.`,
           // - false  → never forward; cheaper, observer only sees placeholders
           // - 'auto' → forward only if the observer model supports image input
           observeAttachments: 'auto',
+        },
+        reflection: {
+          // Low threshold so the Reflector is demoable (default is 40k
+          // observation tokens, which a demo session never reaches). Once
+          // accumulated observations cross this, the Reflector condenses
+          // them into a higher-level summary and generationCount increments.
+          observationTokens: 2_000,
         },
       },
     },

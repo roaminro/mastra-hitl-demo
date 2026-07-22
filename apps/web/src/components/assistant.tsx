@@ -130,7 +130,10 @@ export const Assistant = () => {
         <main className="h-full min-w-0 flex-1">
           {/* ToolFallback override renders the codemode-agent's
               `execute_typescript` calls as code + aggregated result. */}
-          <Thread components={{ ToolFallback: CodeModeToolFallback }} />
+          <Thread
+            components={{ ToolFallback: CodeModeToolFallback }}
+            showOmStatus={agentId === DEFAULT_AGENT_ID}
+          />
         </main>
       </div>
     </AssistantRuntimeProvider>
