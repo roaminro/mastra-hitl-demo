@@ -114,6 +114,13 @@ never claim a detail is unavailable before checking recall.`,
           // Keep less raw history after activation so the eviction (and the
           // resulting "Memory activated" event) is clearly visible in a demo.
           bufferActivation: 0.5,
+          // Whether image/file attachments are forwarded to the Observer LLM
+          // (the transcript always keeps a `[Image #1: name.png]` placeholder):
+          // - true   → always forward; observer can describe image contents,
+          //            but requires a vision-capable observer model (default)
+          // - false  → never forward; cheaper, observer only sees placeholders
+          // - 'auto' → forward only if the observer model supports image input
+          observeAttachments: 'auto',
         },
       },
     },
