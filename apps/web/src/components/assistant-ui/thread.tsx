@@ -3,7 +3,7 @@ import {
   ComposerAttachments,
   UserMessageAttachments,
 } from "@/components/assistant-ui/attachment";
-import { ComposerAddImageUrl } from "@/components/assistant-ui/add-image-url";
+import { ComposerAddAttachmentUrl } from "@/components/assistant-ui/add-attachment-url";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import {
   Reasoning,
@@ -230,7 +230,7 @@ const ComposerAction: FC<{ showOmStatus: boolean }> = ({ showOmStatus }) => {
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
       <div className="flex items-center gap-1">
         <ComposerAddAttachment />
-        <ComposerAddImageUrl />
+        <ComposerAddAttachmentUrl />
         {showOmStatus && <ComposerOmStatus />}
       </div>
       <div className="flex items-center gap-1.5">

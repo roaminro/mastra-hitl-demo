@@ -29,35 +29,51 @@ const useFileSrc = (file: File | undefined) => {
   const [src, setSrc] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    if (!file) {
-      setSrc(undefined);
-      return;
-    }
+    if (!file) return;
 
     const objectUrl = URL.createObjectURL(file);
-    setSrc(objectUrl);
+    // Async so the effect body doesn't set state synchronously.
+    queueMicrotask(() => setSrc(objectUrl));
 
     return () => {
       URL.revokeObjectURL(objectUrl);
+      setSrc((current) => (current === objectUrl ? undefined : current));
     };
   }, [file]);
 
-  return src;
+  return file ? src : undefined;
 };
 
 const useAttachmentSrc = () => {
-  const { file, src } = useAuiState(
-    useShallow((s): { file?: File; src?: string } => {
-      if (s.attachment.type !== "image") return {};
-      if (s.attachment.file) return { file: s.attachment.file };
-      const src = s.attachment.content?.filter((c) => c.type === "image")[0]
-        ?.image;
-      if (!src) return {};
-      return { src };
+  const { file, src, contentType } = useAuiState(
+    useShallow((s): { file?: File; src?: string; contentType?: string } => {
+      const attachment = s.attachment;
+      if (attachment.type === "image") {
+        if (attachment.file)
+          return { file: attachment.file, contentType: "image" };
+        const src = attachment.content?.filter((c) => c.type === "image")[0]
+          ?.image;
+        if (!src) return {};
+        return { src, contentType: "image" };
+      }
+      // Documents/files: URL-based attachments carry a `file` part whose
+      // `data` is the URL (or a data URL for uploaded files).
+      const filePart = attachment.content?.filter((c) => c.type === "file")[0];
+      if (filePart && typeof filePart.data === "string") {
+        return {
+          src: filePart.data,
+          contentType: filePart.mimeType || attachment.contentType,
+        };
+      }
+      if (attachment.file) {
+        return { file: attachment.file, contentType: attachment.contentType };
+      }
+      return {};
     }),
   );
 
-  return useFileSrc(file) ?? src;
+  const fileSrc = useFileSrc(file);
+  return { src: fileSrc ?? src, contentType };
 };
 
 type AttachmentPreviewProps = {
@@ -81,10 +97,71 @@ const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
   );
 };
 
+/**
+ * Renders a PDF in an iframe. Hosts often serve PDFs with the wrong
+ * content-type (e.g. raw.githubusercontent sends application/octet-stream +
+ * nosniff), which browsers refuse to render inline — so we fetch the bytes
+ * and re-wrap them in a correctly-typed blob URL. Falls back to the direct
+ * URL if the fetch fails (e.g. CORS-restricted hosts).
+ */
+const PdfPreview: FC<AttachmentPreviewProps> = ({ src }) => {
+  const [blobSrc, setBlobSrc] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    let objectUrl: string | undefined;
+    let cancelled = false;
+
+    fetch(src)
+      .then((res) => (res.ok ? res.blob() : Promise.reject(res.status)))
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(
+          new Blob([blob], { type: "application/pdf" }),
+        );
+        setBlobSrc(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setBlobSrc(src);
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      setBlobSrc(undefined);
+    };
+  }, [src]);
+
+  return (
+    <div className="flex h-[80dvh] w-full flex-col gap-1.5">
+      {blobSrc ? (
+        <iframe
+          src={blobSrc}
+          title="PDF attachment preview"
+          className="min-h-0 w-full flex-1 rounded-md border"
+        />
+      ) : (
+        <div className="text-muted-foreground flex min-h-0 w-full flex-1 items-center justify-center rounded-md border text-sm">
+          Loading PDF…
+        </div>
+      )}
+      <a
+        href={src}
+        target="_blank"
+        rel="noreferrer"
+        className="text-muted-foreground hover:text-foreground self-end text-xs underline"
+      >
+        Open in new tab
+      </a>
+    </div>
+  );
+};
+
 const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
-  const src = useAttachmentSrc();
+  const { src, contentType } = useAttachmentSrc();
 
   if (!src) return children;
+
+  const isPdf = contentType === "application/pdf";
 
   return (
     <Dialog>
@@ -95,10 +172,10 @@ const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
       </DialogTrigger>
       <DialogContent className="aui-attachment-preview-dialog-content [&>button]:bg-foreground/60 [&_svg]:text-background [&>button]:hover:[&_svg]:text-destructive p-2 sm:max-w-3xl [&>button]:rounded-full [&>button]:p-1 [&>button]:opacity-100 [&>button]:ring-0!">
         <DialogTitle className="aui-sr-only sr-only">
-          Image Attachment Preview
+          Attachment Preview
         </DialogTitle>
         <div className="aui-attachment-preview bg-background relative mx-auto flex max-h-[80dvh] w-full items-center justify-center overflow-hidden">
-          <AttachmentPreview src={src} />
+          {isPdf ? <PdfPreview src={src} /> : <AttachmentPreview src={src} />}
         </div>
       </DialogContent>
     </Dialog>
@@ -106,12 +183,14 @@ const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
 };
 
 const AttachmentThumb: FC = () => {
-  const src = useAttachmentSrc();
+  const { src, contentType } = useAttachmentSrc();
+  // Only images can render as a thumbnail; documents fall through to the icon.
+  const imageSrc = contentType?.startsWith("image") ? src : undefined;
 
   return (
     <Avatar className="aui-attachment-tile-avatar h-full w-full rounded-none">
       <AvatarImage
-        src={src}
+        src={imageSrc}
         alt="Attachment preview"
         className="aui-attachment-tile-image object-cover"
       />
